@@ -265,3 +265,10 @@ storm_cq <- function(data, Site, startDate, endDate, var, n, freq){
   # return a list of the plot, hi, and slope
   return(list(plot, hi, area, slope))
 }
+
+# fill in missing data with  mean from previous and next time step
+reassign<- function (data, var, DateTime){
+  t<-((data[which(data$dateTime==ymd_hms(DateTime) - 7200), var]+
+         data[which(data$dateTime==ymd_hms(DateTime) + 7200), var])/2)
+  return(as.numeric(t))
+}
