@@ -1,0 +1,1609 @@
+---
+title: "Storm stats"
+author: "Taryn Waite"
+date: "6/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+```
+
+## Data retrieval
+
+```{r discharge/WQ data}
+# this might not work because of a cloud issue I think? Not sure...
+# will fix later but the final event dataframe (chunk 9) does load
+WQ_hourly_discharge <- read.csv("WQ_hourly_discharge.csv")
+```
+
+```{r La Crosse airport precip data}
+precip1 <- read_csv("data/precip.csv") %>% 
+  rename(precip = `Precip (in)`) %>% 
+  mutate(precip = as.numeric(precip), Date = mdy(Date))
+
+dailyPrecip <- precip1 %>% 
+  drop_na() %>% group_by(Date) %>% 
+  summarize(precip = sum(precip))
+
+# function to return the cumulative precip
+# during a given stretch of time given a start and end date
+totalPrecip <- function(startDate, endDate, data){
+  total <- data %>% 
+    filter(Date >= ymd(startDate), Date <= ymd(endDate)) %>% 
+    summarize(sum = sum(precip))
+  return(total$sum)
+}
+```
+
+```{r winona precip data}
+# precip data from winona, mn (upstream from discharge site)
+precip2 <- read_csv("data/daily_precip_winona.csv") %>% 
+  rename(precip = PRCP, snow = SNOW) %>% 
+  mutate(precip = as.numeric(precip), snow = as.numeric(snow),
+         Date = mdy(Date))
+
+# function to return cumulative precip at a date
+# since Jan 1st of that year
+yearTotalPrecip <- function(date, data) {
+  total <- data %>% 
+    drop_na() %>% 
+    filter(year(Date) == year(ymd(date)), Date < ymd(date)) %>% 
+    summarize(sum = sum(precip))
+  return(total$sum)
+}
+```
+
+```{r cumulative discharge}
+library(dataRetrieval)
+unitDischarge <- readNWISuv(siteNumbers = "05378500", parameterCd="00060", startDate = "2015-06-01", endDate = "2018-10-12") %>% rename(discharge = X_00060_00000)
+
+# given an event start date, returns the cumulative discharge
+# from 30 days before the start date until the start date
+# use unitDischarge (above) as the data argument
+# freq is number of seconds per row (900 for 15-minute data)
+prev.month.discharge <- function(startDate, data, freq){
+  subset <- data %>% filter(dateTime >= ymd(startDate) - days(30),
+                            dateTime < ymd(startDate))
+  # calculate cumulative discharge
+  return(sum(subset$discharge)*freq)
+}
+```
+
+
+```{r noaa precip data}
+## trying to access the noaa precipitation data --
+## it's not coming up with any stations -- not sure if there
+## really aren't any or if I'm doing something wrong
+devtools::install_github("rstudio/leaflet")
+library(lawn)
+lawn_bbox_polygon(c(-92, 43.7, -91, 44.2)) %>% view
+
+options(noaakey = "tZxiLvtyLFyfPvINCgoGbuZBmgjqxjJb")
+
+ncdc_stations(extent = c(-93, 43, -89, 45))
+```
+
+## Calculating event metrics
+This section deals with calculating various storm statistics/characteristics. Given data for the duration of a storm, the goal is to be able to produce information such as storm duration, maximum discharge, change in discharge, antecedent conditions, etc. 
+
+First, we'll calculate storm duration. We might need to know both the length of the entire storm (given by the start and end dates) and the length of the "loop" portion of the storm (where there are matching discharge values for the rising and falling limbs, which is the portion for which we calculate HI). Here are functions for both of these:
+```{r storm length stats}
+# given data from the duration of the storm,
+# returns the length of the storm in days
+storm.length <- function(data, startDate, endDate){
+  return(as.numeric(ymd(endDate)-ymd(startDate)))
+}
+
+# returns the length of the portion of the storm
+# for which HI could be calculated (overlapping limbs)
+storm.length.loop <- function(data){
+  # find minimum discharge rows for rising and falling limbs
+  mins <- data %>% filter(limb != "peak") %>% group_by(limb) %>% 
+    summarise(min = min(hourlyDischarge))
+  # the larger of the two is where the intervals start
+  minDisLoop <- max(mins$min)
+  # subset data to just the loop
+  loop <- data %>% filter(hourlyDischarge >= minDisLoop)
+  # get start and end dates for the loop
+  start <- loop %>% summarize(start = min(dateTime))
+  end <- loop %>% summarize(end = max(dateTime))
+  return(as.numeric(end-start))
+}
+```
+
+Next, we need a function to calculate the total change in discharge from the start of the storm to the peak. Here are 2 versions of this function. The first simply returns the change in discharge from the start of the storm (the earliest date in the storm time series) to the storm peak. The second returns the change in discharge during the loop section of the event (as described above).
+**NOTE:** both of these functions use the raw data, not the smoothed data. We may want to change this later -- I'm not sure which one it makes more sense to use.
+```{r discharge stats}
+# returns the change in discharge (raw data)
+# from the start of the event to the peak
+storm.dis.change <- function(data){
+  start <- (data %>% slice_min(dateTime))[["hourlyDischarge"]]
+  peak <- (data %>% slice_max(hourlyDischarge))[["hourlyDischarge"]]
+  return(as.numeric(peak)-as.numeric(start))
+}
+
+# returns the change in discharge (raw data)
+# from the start of the overlapping rise/fall discharge
+# (where the HI begins to be calculated) to the peak
+storm.dis.change.loop <- function(data){
+  # find minimum discharge values for rising and falling limbs
+  mins <- data %>% filter(limb != "peak") %>% group_by(limb) %>% 
+    summarise(min = min(hourlyDischarge))
+  # the larger of the two is where the intervals start
+  start <- max(mins$min)
+  peak <- (data %>% slice_max(hourlyDischarge))[["hourlyDischarge"]]
+  return(as.numeric(peak) - as.numeric(start))
+}
+
+# returns the maximum discharge value from the event
+storm.max.dis <- function(data){
+  maxDis <- data %>% summarise(maxDis = max(hourlyDischarge))
+  return(as.numeric(maxDis))
+}
+
+# returns the baseline discharge (discharge at beginning of event)
+base.dis <- function(startDate, data){
+  dis <- data %>% filter(date == ymd(startDate)) %>% 
+    summarise(mean = mean(hourlyDischarge))
+  return(as.numeric(dis))
+}
+```
+
+It might also be interesting to see if temperature impacts c-q relationships or seasonal patterns. Here is a function to calculate the average water temperature during the event:
+```{r temperature stats}
+storm.avg.temp <- function(data){
+  return(as.numeric(data %>% summarise(mean = mean(Temp))))
+}
+```
+
+Calculating the time difference between the peak discharge and peak concentration for flushing events could also be useful, especially for investigating the time lag with the backwater site.
+```{r time between peaks}
+
+```
+
+
+## Data structure for all events
+
+Now that we have ways of calculating event statistics, as well as HI and slope for the different constituents, we'll want to have all of the events in one dataframe with their start dates, end dates, storm statistics, and HI/slope values.
+
+```{r function for adding events}
+# initialize an empty tibble with all desired columns
+events <- tibble(startDate = Date(), endDate = Date(), 
+                 length = numeric(), length_loop = numeric(),
+                 dis_change = numeric(), dis_change_loop = numeric(),
+                 max_dis = numeric(), avg_temp = numeric(),
+                 HI_turb = numeric(), Slope_turb = numeric(),
+                 HI_n03 = numeric(), Slope_n03 = numeric(),
+                 HI_chl = numeric(), Slope_chl = numeric(),
+                 HI_fdom = numeric(), Slope_fdom = numeric(),
+                 HI_bga = numeric(), Slope_bga = numeric())
+
+# adds a high-discharge event to the events tibble,
+# given the data, start date, end date, and number of
+# observations per day
+add.event <- function(data, Site, start, end, freq){
+  # subset the data to include just the event
+  subset <- data %>% 
+    filter(dateTime >= ymd_hm(start) & dateTime <= ymd_hm(end)) %>% 
+    filter(site == "MC")
+  # add rising or falling limb column
+  peakDate <- (subset %>% slice_max(hourlyDischarge))[["dateTime"]]
+  # RL if before peakDate, FL if after, peak if on peakDate
+  subset <- subset %>% 
+    mutate(limb = case_when(dateTime < peakDate ~ "RL",
+                            dateTime > peakDate ~ "FL",
+                            T ~ "peak"))
+  turb <- storm_cq(data, Site, start, end, "Turb", 20, freq)
+  n03 <- storm_cq(data, Site, start, end, "NO3_mgL", 20, freq)
+  chl <- storm_cq(data, Site, start, end, "CHLugL", 20, freq)
+  fdom <- storm_cq(data, Site, start, end, "FDOMqsu", 20, freq)
+  bga <- storm_cq(data, Site, start, end, "BGAugL", 20, freq)
+  return(events %>% add_row(startDate = ymd_hm(start), endDate = ymd_hm(end),
+                     length = as.numeric(ymd_hm(end) - ymd_hm(start)), 
+                     length_loop = storm.length.loop(subset),
+                     dis_change = storm.dis.change(subset),
+                     dis_change_loop = storm.dis.change.loop(subset),
+                     max_dis = storm.max.dis(subset),
+                     avg_temp = storm.avg.temp(subset),
+                     HI_turb = turb[[2]], Slope_turb = turb[[4]], area_turb = turb[[3]],
+                     HI_n03 = n03[[2]], Slope_n03 = n03[[4]], area_n03 = n03[[3]],
+                     HI_chl = chl[[2]], Slope_chl = chl[[4]], area_chl = chl[[3]],
+                     HI_fdom = fdom[[2]], Slope_fdom = fdom[[4]], area_fdom = fdom[[3]],
+                     HI_bga = bga[[2]], Slope_bga = bga[[4]], area_bga = bga[[3]]))
+}
+```
+
+```{r adding events}
+# initialize the tibble
+events <- tibble(startDate = Date(), endDate = Date(), 
+                 length = numeric(), length_loop = numeric(),
+                 dis_change = numeric(), dis_change_loop = numeric(),
+                 max_dis = numeric(), avg_temp = numeric(),
+                 HI_turb = numeric(), Slope_turb = numeric(), area_turb = numeric(),
+                 HI_n03 = numeric(), Slope_n03 = numeric(), area_n03 = numeric(),
+                 HI_chl = numeric(), Slope_chl = numeric(), area_chl = numeric(),
+                 HI_fdom = numeric(), Slope_fdom = numeric(), area_fdom = numeric(),
+                 HI_bga = numeric(), Slope_bga = numeric(), area_bga = numeric())
+
+# add events -- this takes a long time to run 
+events <- add.event(WQ_hourly_discharge, "MC", "2016-04-25-00-00", "2016-05-24-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-07-13-00-00", "2016-08-10-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-06-01-00-00", "2016-06-14-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-08-10-00-00", "2016-09-05-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-09-06-00-00", "2016-09-20-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-09-20-00-00", "2016-10-15-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-06-14-00-00", "2017-06-28-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-07-19-00-00", "2017-07-25-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-07-26-00-00", "2017-07-30-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-08-06-00-00", "2017-08-13-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-09-20-00-00", "2017-09-24-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2018-06-15-00-00", "2018-07-31-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2015-07-06-00-00", "2015-07-28-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2015-08-18-00-00", "2015-09-04-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2015-09-17-00-00", "2015-09-24-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2015-09-09-00-00", "2015-09-17-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-08-16-00-00", "2017-09-17-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2018-09-03-00-00", "2018-09-15-00-00", 12)
+
+
+
+#write.csv(events, "data/events.csv")
+#events <- read_csv("data/events.csv")
+
+# get rid of first column
+#events <- events[,-1]
+
+# get rid of the duplicate rows
+# (for some reason, some of the events were added multiple times)
+eventsUnique <- distinct(events)
+
+# add precip data and baseline discharge
+eventsUnique2 <- eventsUnique %>% 
+  mutate(precip = mapply(totalPrecip, startDate, endDate, MoreArgs = list(precip2)),
+         precipYear = mapply(yearTotalPrecip, startDate, MoreArgs = list(precip2)),
+         base_dis = max_dis - dis_change,
+         prev_month_dis = mapply(prev.month.discharge, startDate, MoreArgs = list(unitDischarge,900)))
+
+
+```
+
+Below, we reshape the data so that there are 4 rows for each event (one for each constituent). This makes plotting easier, so that each constituent doesn't have to be plotted separately. We also add columns for the direction of hysteresis (clockwise or counterclockwise) and slope (flushing or dilution). In Aguilera and Melack (2018), they classify clockwise hysteresis as HI >= 0.05, counterclockwise hysteresis as HI <= -0.05, flushing as $\Delta C$ >= 0.1, and dilution as $\Delta C$ <= 0.1. For now, I'm going to use 0.05 as the limit for flushing and dilution.
+
+```{r reshaping the data}
+eventsReshaped <- eventsUnique2 %>% 
+  gather(key, value, -c(startDate, endDate, length, length_loop,
+                        dis_change, dis_change_loop, max_dis, avg_temp, 
+                        precip, precipYear, base_dis, prev_month_dis)) %>% 
+  separate(key, c("measure", "var"), "_") %>% 
+  tidyr::spread(measure, value)
+
+# add columns for directions of hysteresis, slope, and complexity
+eventsFinal <- eventsReshaped %>% 
+  mutate(H_dir = case_when(HI >= 0.05 ~ "clockwise",
+                           HI <= -0.05 ~ "counter-clockwise", T ~ "none"),
+         slope_dir = case_when(Slope >= 0.05 ~ "flushing",
+                               Slope <= -0.05 ~ "dilution", T ~ "constant"),
+         complex = case_when(area >= abs(2*HI) ~ "complex",
+                             T ~ "not completx"))
+# one event (starting 9/9/15) had a value >1 for fdom slope because of negative
+# values at the beginning-- might be best to take out the whole fdom row for
+# this event because the data jumps from negatives to 100 (the issue we've been 
+# looking at for the time series)
+eventsFinal2 <- eventsFinal[-c(70,87,88),]
+
+```
+
+## Data exploration/ visualization
+
+```{r summarizing events}
+eventsTurb <- eventsFinal2 %>% filter(var == "turb")
+
+eventsTurb %>% 
+  ggplot(aes(x = precip)) + 
+  geom_histogram(bins = 5) + theme_bw()
+
+
+eventsTurb %>% 
+  ggplot(aes(x = max_dis)) +
+  geom_histogram(bins = 5) + theme_bw()
+
+eventsTurb %>% 
+  ggplot(aes(x = dis_change)) +
+  geom_histogram(bins = 5) + theme_bw()
+
+eventsTurb %>% 
+  ggplot(aes(x = avg_temp)) +
+  geom_histogram(bins = 5) + theme_bw()
+
+eventsTurb %>% 
+  ggplot(aes(x = prev_month_dis)) +
+  geom_histogram(bins = 5) + theme_bw()
+
+# base R plots look better for histograms with few events
+png(filename = "event_hists.png", width = 5, height = 5,
+    units = "in", res = 300, bg = "transparent")
+par(mfrow = c(3,3), bg = "transparent", mgp=c(2.5,1,0), mar = c(5,2,1,2))
+hist(eventsTurb$avg_temp, breaks = c(14, 17, 20, 23, 26, 29),
+     xlab = "Average temperature (C)", xlim = c(10, 30),
+     ylab = "Number of events", main = "")
+hist(eventsTurb$length, breaks = 5,
+     xlab = "Length (days)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$dis_change, breaks = c(0, 16000, 32000, 48000, 64000, 80000),
+     xlab = "Change in discharge (ft^3/s)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$max_dis, breaks = 5,
+     xlab = "Peak discharge (ft^3/s)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$precip, breaks = 5,
+     xlab = "Cumulative precipitation (in)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$precipYear, breaks = 5,
+     xlab = "Precipitation since Jan 1 (in)", 
+     ylab = "Number of events", main = "")
+plot.new()
+hist(eventsTurb$prev_month_dis, breaks = 5,
+     xlab = "Previous month discharge", 
+     ylab = "Number of events", main = "")
+dev.off()
+
+png(filename = "event_hists3.png", width = 5, height = 2,
+    units = "in", res = 300, bg = "transparent")
+par(mfrow = c(1,3), bg = "transparent", mgp=c(2.5,1,0), mar = c(5,2,1,2))
+hist(eventsTurb$avg_temp, breaks = c(14, 17, 20, 23, 26, 29),
+     xlab = "Average temperature (C)", xlim = c(10, 30),
+     ylab = "Number of events", main = "")
+hist(eventsTurb$length, breaks = 5,
+     xlab = "Length (days)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$prev_month_dis, breaks = 5,
+     xlab = "Previous month discharge", 
+     ylab = "Number of events", main = "")
+dev.off()
+
+
+eventsTurb2 <- eventsTurb %>% 
+  mutate(length_bin = case_when(length < 10 ~ "< 10",
+                                length < 20 ~ "10-20",
+                                length < 30 ~ "20-30",
+                                T ~ ">= 30"),
+         month = case_when(month(startDate) == 4 ~ "April",
+                           month(startDate) == 6 ~ "June",
+                           month(startDate) == 7 ~ "July",
+                           month(startDate) == 8 ~ "August",
+                           month(startDate) == 9 ~ "September"))
+eventsTurb2$length_bin <- factor(eventsTurb2$length_bin, 
+                                 levels = c("< 10", "10-20", "20-30", ">= 30"))
+eventsTurb2$month <- factor(eventsTurb2$month,
+                            levels = c("April", "June", "July", "August", "September"))
+
+### monthly event count plot ###
+png(filename = "monthly_event_count.png", width = 8, height = 6,
+    units = "in", res = 300, bg = "transparent")
+eventsTurb2 %>% 
+  ggplot(aes(x = month, fill = as.factor(year(startDate)))) +
+  geom_bar() + theme_bw() +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA),
+         legend.background = element_rect(fill = "transparent")) +
+  scale_fill_brewer(palette = "Set2", name = "Year") +
+  xlab("Month of event start date") + ylab("Number of events") 
+dev.off()
+
+### version 2: heatmap ###
+eventsCount <- (eventsTurb2 %>% 
+  mutate(year = as.factor(year(startDate))))[,c(1, 16,17)] %>% 
+  group_by(year, month) %>% tally() 
+
+allMonthYear <- eventsCount %>% expand(month, year) 
+allMonthYear <- allMonthYear %>% as_tibble() %>% 
+  add_row(month = "May", year = as.factor(2015)) %>% 
+   add_row(month = "May", year = as.factor(2016)) %>% 
+   add_row(month = "May", year = as.factor(2017)) %>% 
+   add_row(month = "May", year = as.factor(2018))
+
+eventsCount2 <- full_join(eventsCount, allMonthYear) %>% 
+  mutate(n = case_when(!is.na(n) ~ as.character(n),
+                       T ~ "0"))
+
+eventsCount2$month <- factor(eventsCount2$month,
+                            levels = c("April", "May", "June", "July", "August", "September"))
+
+png(filename = "monthly_event_count_grid.png", width = 6, height = 5.5,
+    units = "in", res = 300, bg = "transparent")
+eventsCount2 %>% 
+  ggplot(aes(x = year, y = month, fill = n)) +
+  geom_tile(color = "black") +
+  scale_fill_manual(values = c("white", brewer.pal(3, "Paired")[1], brewer.pal(3, "Paired")[2]),
+                    name = "Number of Events") +
+  theme_bw() + xlab("Year") + ylab("Month") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA),
+        legend.background = element_rect(fill = "transparent"), legend.position = "bottom") 
+dev.off()  
+
+
+
+### plot of temp over time ###
+png(filename = "temp_time.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+eventsTurb %>% 
+  ggplot(aes(x=as.Date(paste(2014,strftime(startDate,format="%m-%d"),sep="-")), 
+             y=avg_temp, 
+             color=strftime(startDate,format="%Y"))) +
+  geom_point(cex = 2) + theme_bw() + scale_color_brewer(palette = "Set2", name = "Year") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA),
+        legend.background = element_rect(fill = "transparent")) +
+  xlab("Start date") + ylab("Average temperature (C)")
+dev.off()
+
+eventsTurb %>% 
+  ggplot(aes(x=as.Date(paste(2014,strftime(startDate,format="%m-%d"),sep="-")), 
+             y=length, 
+             color=strftime(startDate,format="%Y")), size=5) +
+  geom_point() + theme_bw() + scale_color_brewer(palette = "Set2", name = "Year") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))
+
+plot(x = eventsTurb$length, y = eventsTurb$precip)
+
+length_maxDis <- eventsTurb %>% 
+  ggplot(aes(x = length, y = max_dis)) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  xlab("Length (days)") + ylab("Maximum discharge (ft^3/s)") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+
+length_changeDis <- eventsTurb %>% 
+  ggplot(aes(x = length, y = dis_change)) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  xlab("Length (days)") + ylab("Change in discharge (ft^3/s)") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+
+png(filename = "length_dis.png", width = 6, height = 6,
+    units = "in", res = 300, bg = "transparent")
+ggarrange(length_changeDis, length_maxDis)
+dev.off()
+  
+```
+
+```{r plotting HI and slope}
+# scatter plot of HI (x-axis) and slope (y-axis) for each storm
+# with each constituent plotted separately
+
+# New facet label names for constituents
+var.labs <- c("Cyanobacteria", "Chlorophyll", "FDOM", "Nitrate", "Turbidity")
+names(var.labs) <- c("bga", "chl", "fdom", "n03", "turb")
+
+png(filename = "HI_slope_const.png", 
+    width = 4, height = 5, units = "in", res = 300, bg = "transparent")
+eventsFinal2 %>% 
+  ggplot(aes(x = HI, y = Slope)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 3) +
+  theme_bw() + xlab("Hysteresis Index") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+
+# looking at each storm individually
+eventsFinal2 %>% 
+  ggplot(aes(x = HI, y = Slope, col = var)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  geom_vline(xintercept=0, linetype="dashed", color = "black") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~as.factor(startDate)) +
+  scale_color_brewer(palette = "Dark2", name = "Constituent", labels = var.labs) 
+
+# just the 2017 events
+png(filename = "events_hi_slope_2017.png", width = 5, height = 4,
+    units = "in", res = 300, bg = "transparent")
+eventsFinal2 %>% filter(year(startDate) == 2017) %>% 
+  ggplot(aes(x = HI, y = Slope, col = var)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  geom_vline(xintercept=0, linetype="dashed", color = "black") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~as.factor(startDate), nrow = 3) +
+  scale_color_brewer(palette = "Dark2", name = "Constituent", labels = var.labs) +
+  theme_bw() + xlab("Hysteresis Index") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA),
+        legend.background = element_rect(fill = "transparent",colour = NA)) 
+dev.off()
+
+# violin plots of HI and slope for the constituents
+eventsFinal2 %>% 
+  ggplot(aes(x = var, y = HI)) +
+  geom_violin() + ylim(-1, 1) +
+  geom_hline(yintercept = 0, linetype="dashed", color = "red") +
+  scale_x_discrete(labels = var.labs) + xlab("Constituent")
+
+eventsFinal2 %>% 
+  ggplot(aes(x = var, y = Slope)) +
+  geom_violin() + ylim(-1, 1) +
+  geom_hline(yintercept = 0, linetype="dashed", color = "red") +
+  scale_x_discrete(labels = var.labs) + xlab("Constituent")
+
+eventsN03 %>% 
+  ggplot(aes(x = as.factor(year(startDate)), y = HI)) +
+  geom_violin() + ylim(-1, 1) +
+  geom_hline(yintercept = 0, linetype="dashed", color = "red") +
+  scale_x_discrete(labels = var.labs) + xlab("Constituent")
+
+# bar plots of hysteresis direction and slope for each constituent
+hiBar <- eventsFinal2 %>% 
+  ggplot(aes(x = var, fill = H_dir)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  scale_fill_brewer(palette = "Paired", name = "Hysteresis Type") +
+  ylab("Number of Events") + xlab("Constituent") +
+  scale_x_discrete(labels = var.labs) +
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12)) +
+  theme_bw() + 
+  theme(plot.background = element_rect(fill = "transparent", colour = NA),
+        legend.background = element_rect(fill = "transparent")) 
+  
+# bar plots of overall type (both hysteresis and slope-- the quadrant)
+eventsQuadrant <- eventsFinal2 %>% 
+  mutate(type = case_when(H_dir == "clockwise" & slope_dir == "flushing" ~ "CW_F",
+                          H_dir == "clockwise" & slope_dir == "dilution" ~ "CW_D",
+                          H_dir == "clockwise" & slope_dir == "constant" ~ "CW_C",
+                          H_dir == "counter-clockwise" & slope_dir == "flushing" ~ "CCW_F",
+                          H_dir == "counter-clockwise" & slope_dir == "dilution" ~ "CCW_D",
+                          H_dir == "counter-clockwise" & slope_dir == "constant" ~ "CCW_C",
+                          H_dir == "none" & slope_dir == "flushing" ~ "N_F",
+                          H_dir == "none" & slope_dir == "dilution" ~ "N_D",
+                          H_dir == "none" & slope_dir == "constant" ~ "N_C"))
+
+# need to reorder the types
+eventsQuadrant$type <- factor(eventsQuadrant$type, 
+                                 levels = c("CCW_D", "CW_D", "CCW_F", "CW_F",
+                                            "CCW_C", "CW_C", "N_D", "N_F", "N_C"))
+
+eventsQuadrant %>% 
+  ggplot(aes(x = var, fill = type)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  scale_fill_brewer(palette = "Paired", name = "Type") +
+  ylab("Number of Events") + xlab("Constituent") +
+  scale_x_discrete(labels = var.labs) +
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12)) +
+  theme_bw() + 
+  theme(plot.background = element_rect(fill = "transparent", colour = NA),
+        legend.background = element_rect(fill = "transparent")) 
+
+eventsFinal2 %>% 
+  ggplot(aes(x = H_dir, fill = slope_dir)) +
+  geom_bar() +
+  facet_wrap(~var, nrow = 1) +
+  scale_fill_brewer(palette = "Paired", name = "")
+
+# need to reorder the slope directions
+eventsFinal2$slope_dir <- factor(eventsFinal2$slope_dir, 
+                                 levels = c("flushing", "dilution", "constant"))
+slopeBar <- eventsFinal2 %>% 
+  ggplot(aes(x = var, fill = slope_dir)) +
+  geom_bar(position = "dodge") +
+  scale_fill_brewer(palette = "Paired", name = "Slope Type") +
+  ylab("Number of Events") + xlab("Constituent") +
+  scale_x_discrete(labels = var.labs) +
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12)) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) 
+
+png(filename = "HI_slope_bar.png", 
+    width = 6, height = 6, units = "in", res = 300, bg = "transparent")
+ggarrange(hiBar, slopeBar, nrow = 2)
+dev.off()
+
+# another idea is to have a 3X3 grid of response types and make a bar plot for each 
+# type with constituent on the x-axis
+# need to reorder the types
+eventsQuadrant$type <- factor(eventsQuadrant$type, 
+                                 levels = c("CW_F", "CW_C", "CW_D",
+                                            "N_F", "N_C", "N_D",
+                                            "CCW_F", "CCW_C",  "CCW_D"))
+eventsQuadrant %>% 
+  ggplot(aes(x = var, y = (..count..)/nrow(eventsUnique))) +
+  geom_bar() +
+  facet_wrap(~type, drop = F) 
+
+# need to reorder the slope directions
+eventsFinal2$slope_dir <- factor(eventsFinal2$slope_dir, 
+                                 levels = c("flushing", "constant", "dilution"),
+                                 labels = c("Flushing", "Constant", "Dilution"))
+# need to reorder the hysteresis directions
+eventsFinal2$H_dir <- factor(eventsFinal2$H_dir, 
+                             levels = c("clockwise", "none", "counter-clockwise"),
+                             labels = c("Clockwise", "No Hysteresis", "Counter-clockwise"))
+
+png("bar_grid_HI_S.png", width = 6, height = 5,
+    units = "in", res = 300, bg = "transparent")
+eventsFinal2 %>% 
+  ggplot(aes(x = var, y = (..count..)/nrow(eventsUnique), fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir), rows = vars(slope_dir), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom") +
+  scale_fill_brewer(palette = "Dark2", labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events")
+dev.off()
+
+# plotting hysteresis with complex status
+events_hyst_type <- eventsFinal2 %>% 
+  mutate(hyst_type = case_when(complex == "complex" ~ "complex",
+                               H_dir == "clockwise" ~ "clockwise",
+                               H_dir == "counter-clockwise" ~ "counter-clockwise",
+                               T ~ "no hysteresis"))
+events_hyst_type$hyst_type <- factor(events_hyst_type$hyst_type, 
+                                     levels = c("clockwise", "counter-clockwise", 
+                                                "complex", "no hysteresis"))
+
+hiBar <- events_hyst_type %>% 
+  ggplot(aes(x = var, fill = hyst_type)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  scale_fill_brewer(palette = "Paired", name = "Hysteresis Type") +
+  ylab("Number of Events") + xlab("Constituent") +
+  scale_x_discrete(labels = var.labs) +
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12)) +
+  theme_bw() + 
+  theme(plot.background = element_rect(fill = "transparent", colour = NA),
+        legend.background = element_rect(fill = "transparent")) 
+```
+
+
+
+```{r event stats vs hi/slope}
+# scatterplots showing relationships between HI/slope and different
+# discharge event characteristics
+eventsFinal2 %>% 
+  ggplot(aes(x = dis_change, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = dis_change, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = length, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = length, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = avg_temp, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = avg_temp, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal3 <- eventsFinal2 %>% 
+  mutate(avg_rate_dis = dis_change/length)
+
+eventsFinal3 %>% 
+  ggplot(aes(x = avg_rate_dis, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal3 %>% 
+  ggplot(aes(x = avg_rate_dis, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = precip, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = precip, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = precipYear, y = HI, 
+             col = year(startDate))) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = precipYear, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = base_dis, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = base_dis, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = prev_month_dis, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+
+eventsFinal2 %>% 
+  ggplot(aes(x = prev_month_dis, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~var)
+```
+
+Continuing from above, we can try running linear models for events metrics vs HI/slope.
+
+```{r linear models from above}
+eventsN03 <- eventsFinal2 %>% filter(var == "n03")
+eventsChl <- eventsFinal2 %>% filter(var == "chl")
+eventsBGA <- eventsFinal2 %>% filter(var == "bga")
+eventsFDOM <- eventsFinal2 %>% filter(var == "fdom")
+
+png(filename = "dis_change_hi_allVar.png", width = 8, height = 6, 
+    units = "in", res = 300, bg = "transparent")
+eventsFinal2 %>% 
+  ggplot(aes(x = dis_change, y = HI, col = var)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  scale_color_manual(values = myColors, name = "Constituent", labels = var.labs) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+
+lm_disChange_turb_HI <- lm(eventsTurb$HI ~ eventsTurb$dis_change)
+summary(lm_disChange_turb_HI)
+lm_disChange_n03_HI <- lm(eventsN03$HI ~ eventsN03$dis_change)
+summary(lm_disChange_n03_HI)
+lm_disChange_chl_HI <- lm(eventsChl$HI ~ eventsChl$dis_change)
+summary(lm_disChange_chl_HI)
+lm_disChange_bga_HI <- lm(eventsBGA$HI ~ eventsBGA$dis_change)
+summary(lm_disChange_bga_HI)
+lm_disChange_fdom_HI <- lm(eventsFDOM$HI ~ eventsFDOM$dis_change)
+summary(lm_disChange_fdom_HI)
+
+lm_disChange_turb_slope <- lm(eventsTurb$Slope ~ eventsTurb$dis_change)
+summary(lm_disChange_turb_slope)
+lm_disChange_n03_slope <- lm(eventsN03$Slope ~ eventsN03$dis_change)
+summary(lm_disChange_n03_slope)
+lm_disChange_chl_slope <- lm(eventsChl$Slope ~ eventsChl$dis_change)
+summary(lm_disChange_chl_slope)
+lm_disChange_bga_slope <- lm(eventsBGA$Slope ~ eventsBGA$dis_change)
+summary(lm_disChange_bga_slope)
+lm_disChange_fdom_slope <- lm(eventsFDOM$Slope ~ eventsFDOM$dis_change)
+summary(lm_disChange_fdom_slope)
+
+# sig: dis_change/HI (FDOM and turb); avg_temp/Slope (turb); avg_temp/HI (nO3)
+
+# plots of significant (ish) linear models 
+# dis change vs hi (fdom)
+eventsFDOM %>% 
+  ggplot(aes(x = dis_change, y = HI)) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) +
+  xlab("Change in discharge (ft^3/s)") + ylab("HI") +
+  annotate(geom="text", x=60000, y=0.75, 
+           label="Dissolved organic matter", col = "blue", cex = 5)
+
+# dis change vs hi (turb)
+eventsTurb %>% 
+  ggplot(aes(x = dis_change, y = HI)) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) +
+  xlab("Change in discharge (ft^3/s)") + ylab("HI") +
+  annotate(geom="text", x=60000, y=0.75, 
+           label="Turbidity", col = "blue", cex = 5)
+
+## both fdom and turb on same plot for dis change vs hi
+eventsFDOM_turb <- eventsFinal2 %>% 
+  filter(var %in% c("turb", "fdom"))
+
+png(filename = "dis_change_hi_turb_fdom.png", width = 5, height = 4,
+    units = "in", res = 300, bg = "transparent")
+eventsFDOM_turb %>% 
+  ggplot(aes(x = dis_change, y = HI, col = var)) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     legend.position = "none") +
+  xlab("Change in discharge (ft^3/s)") + ylab("Hysteresis Index") +
+  scale_color_manual(values = myColors, labels = var.labs, name = "Constituent") +
+  annotate(geom = "text", x = 50000, y = 0.8, hjust = 0, 
+           label = "p = 0.040", col = myColors[3]) +
+  annotate(geom = "text", x = 50000, y = 0.7, hjust = 0,
+           label = "R-squared = 0.24", col = myColors[3]) +
+  annotate(geom = "text", x = 40000, y = -0.55, hjust = 0,
+           label = "p = 0.035", col = myColors[2]) +
+  annotate(geom = "text", x = 40000, y = -0.65, hjust = 0,
+           label = "R-squared = 0.26", col = myColors[2])
+dev.off()
+
+# avg temp vs HI (n03)
+png(filename = "temp_hi_nO3.png", width = 5, height = 4,
+    units = "in", res = 300, bg = "transparent")
+eventsN03 %>% 
+  ggplot(aes(x = avg_temp, y = HI)) +
+  geom_point(col = myColors[4]) + 
+  geom_smooth(method = "lm", se = F, col = myColors[4]) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) +
+  xlab("Average temperature (C)") + ylab("Hysteresis Index") +
+  annotate(geom = "text", x = 17, y = -0.05, hjust = 0,
+           label = "p = 0.063", col = myColors[4], cex = 4) +
+  annotate(geom = "text", x = 17, y = -0.15, hjust = 0,
+           label = "R-squared = 0.20", col = myColors[4], cex = 4)
+dev.off()
+
+# avg temp vs slope (turb)
+png(filename = "temp_slope_turb.png", width = 5, height = 4,
+    units = "in", res = 300, bg = "transparent")
+eventsTurb %>% 
+  ggplot(aes(x = avg_temp, y = Slope)) +
+  geom_point(col = myColors[3]) + 
+  geom_smooth(method = "lm", se = F, col = myColors[3]) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) +
+  xlab("Average temperature (C)") + ylab("Slope") +
+  annotate(geom = "text", x = 17.5, y = 0.23, hjust = 0,
+           label = "p = 0.054", col = myColors[3]) +
+  annotate(geom = "text", x = 17.5, y = 0.19, hjust = 0,
+           label = "R-squared = 0.21", col = myColors[3])
+dev.off()
+
+
+
+```
+
+```{r logistic regression}
+eventsTurb2 <- events_hyst_type %>% filter(var == "turb") %>% 
+  mutate(hyst = case_when(hyst_type == "clockwise" ~ "clockwise",
+                          hyst_type == "counter-clockwise" ~ "counter-clockwise",
+                          T ~ NA_character_))
+eventsN032 <- events_hyst_type %>% filter(var == "n03") %>% 
+  mutate(hyst = case_when(hyst_type == "clockwise" ~ "clockwise",
+                          hyst_type == "counter-clockwise" ~ "counter-clockwise",
+                          T ~ NA_character_))
+eventsN032$hyst <- factor(eventsN032$hyst)
+mylogit <- glm(hyst ~  prev_month_dis,
+               data = eventsN032, family = "binomial")
+summary(mylogit)
+```
+
+```{r multiple linear regressions}
+reg_multi_HI <- function(variable){
+  subset <- eventsFinal2 %>% 
+    filter(var == variable)
+  
+  return((lm(subset$HI ~ 
+             subset$dis_change + subset$length + subset$max_dis + subset$prev_month_dis +
+             subset$avg_temp + subset$precip + subset$precipYear )))
+}
+
+reg_multi_slope <- function(variable){
+  subset <- eventsFinal2 %>% 
+    filter(var == variable)
+  
+  return((lm(subset$Slope ~ 
+             subset$dis_change + subset$length + subset$max_dis + subset$prev_month_dis +
+             subset$avg_temp + subset$precip + subset$precipYear )))
+}
+
+reg_multi_both <- function(variable){
+  subset <- eventsFinal2 %>% 
+    filter(var == variable)
+  
+  return((lm(subset$Slope + subset$HI ~ 
+             subset$dis_change + subset$length + subset$max_dis + subset$prev_month_dis +
+             subset$avg_temp + subset$precip + subset$precipYear )))
+}
+
+# note: for turb, using prev_month_dis instead of day of the year does better
+turb_HI_multi_reg <- reg_multi_HI("turb")
+summary(turb_HI_multi_reg)
+
+plot(x = turb_HI_multi_reg$fitted.values, y = turb_HI_multi_reg$residuals,
+     pch = 20)
+abline(0,0, lty = 2)
+
+# residual plots
+plot(x = eventsTurb2$dis_change, y = turb_HI_multi_reg$residuals)
+abline(0,0)
+
+plot(x = eventsTurb2$length, y = turb_HI_multi_reg$residuals)
+abline(0,0)
+
+plot(x = eventsTurb2$max_dis, y = turb_HI_multi_reg$residuals)
+abline(0,0)
+
+plot(x = eventsTurb2$avg_temp, y = turb_HI_multi_reg$residuals)
+abline(0,0)
+
+plot(x = eventsTurb$precip, y = turb_HI_multi_reg$residuals)
+abline(0,0)
+
+plot(x = eventsTurb$precipYear, y = turb_HI_multi_reg$residuals)
+abline(0,0)
+
+
+```
+
+```{r step AIC}
+# ================ Turbidity ================
+step(reg_multi_HI("turb"))
+summary(lm(eventsTurb$HI ~ eventsTurb$length + eventsTurb$max_dis + 
+             eventsTurb$precipYear + eventsTurb$precip))
+step(reg_multi_slope("turb"))
+summary(lm(eventsTurb$Slope ~ eventsTurb$prev_month_dis + 
+             eventsTurb$avg_temp + eventsTurb$precip))
+step(reg_multi_both("turb"))
+summary(lm(eventsTurb$Slope + eventsTurb$HI ~ eventsTurb$max_dis +
+             eventsTurb$prev_month_dis + eventsTurb$avg_temp + eventsTurb$precipYear))
+
+# ================ Nitrate =================
+step(reg_multi_HI("n03"))
+summary(lm(eventsN03$HI ~ eventsN03$avg_temp))
+step(reg_multi_slope("n03"))
+summary(lm(eventsN03$Slope ~ eventsN03$dis_change + eventsN03$precip +
+             eventsN03$length + eventsN03$prev_month_dis))
+
+png(filename = "nO3_HI_temp.png", width = 4, height = 3,
+    units = "in", res = 300, bg = "transparent")
+eventsN03 %>% ggplot(aes(x = avg_temp, y = HI)) + 
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  xlab("Average Temperature") + ylab("Hysteresis Index") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+
+# ================ FDOM =================
+step(reg_multi_HI("fdom"))
+summary(lm(eventsFDOM$HI ~ eventsFDOM$length))
+step(reg_multi_slope("fdom"))
+summary(lm(eventsFDOM$Slope ~ eventsFDOM$length))
+step(reg_multi_both("fdom"))
+summary(lm(eventsFDOM$Slope + eventsFDOM$HI ~ eventsFDOM$length))
+
+png(filename = "fdom_HI_length.png", width = 4, height = 3,
+    units = "in", res = 300, bg = "transparent")
+eventsFDOM %>% ggplot(aes(x = length, y = HI)) + 
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  xlab("Event length (days)") + ylab("Hysteresis Index") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+
+png(filename = "fdom_S_length.png", width = 4, height = 3,
+    units = "in", res = 300, bg = "transparent")
+eventsFDOM %>% ggplot(aes(x = length, y = Slope)) + 
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  xlab("Event length (days)") + ylab("Slope") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+
+# ================ Chlorophyll ==================
+step(reg_multi_HI("chl"))
+summary(lm(eventsChl$HI ~ 1))
+step(reg_multi_slope("chl"))
+summary(lm(eventsChl$Slope ~ 1))
+
+# ================ BGA =================
+step(reg_multi_HI("bga"))
+summary(lm(eventsBGA$HI ~ 1))
+step(reg_multi_slope("bga"))
+summary(lm(eventsBGA$Slope ~ eventsBGA$prev_month_dis))
+```
+
+
+```{r trees}
+eventsN03 <- eventsN03 %>% 
+  mutate(HI_code = case_when(H_dir == "counter-clockwise" ~ -1,
+                             H_dir == "clockwise" ~ 1, T ~ 0))
+
+library(rpart)
+library(rpart.plot)
+rpart_chl <- rpart(as.factor(H_dir) ~ 
+                 precipYear + precip + max_dis + dis_change + length + avg_temp, data = eventsChl, 
+                  control=rpart.control(minsplit=1, minbucket=1, cp=0.1))
+rpart.plot(rpart_chl, type = 5)
+summary(rpart_chl)
+
+install.packages("tree")
+library(tree)
+tree_n03 <- tree(HI ~ 
+                 precipYear + precip + max_dis + dis_change + length + avg_temp,
+                 data = eventsN03)
+plot(tree_n03)
+text(tree_n03)
+summary(tree_n03)
+
+tree_turb <- tree(as.factor(H_dir) ~ 
+                 precipYear + precip + max_dis + dis_change + length + avg_temp,
+                 data = eventsTurb)
+plot(tree_turb)
+text(tree_turb)
+summary(tree_turb)
+
+tree_chl <- tree(HI ~ 
+                 precipYear + precip + max_dis + dis_change + length + avg_temp,
+                 data = eventsChl)
+plot(tree_chl)
+text(tree_chl)
+summary(tree_chl)
+
+tree_chl2 <- tree(as.factor(H_dir) ~ 
+                 precipYear + precip + max_dis + dis_change + length + avg_temp,
+                 data = eventsChl)
+plot(tree_chl2)
+text(tree_chl2)
+summary(tree_chl2)
+
+plot(eventsChl$precipYear, eventsChl$length, pch=19, col = as.factor(eventsChl$H_dir))
+partition.tree(tree_chl,label="Species",add=TRUE)
+legend(1.75,4.5,legend=unique(eventsN03$HI_code),col=unique(eventsN03$H_dir))
+```
+
+
+Since the above visualizations/ models don't take into account differences between constituents within each event, we can do pairwise constituent comparisons where we look at the difference between the responses of 2 constituents to each event. This gives an overall idea of how constituent responses to the SAME conditions might differ.
+
+First, we can plot the pairs in HI-slope space and connect points representing the same event with line segments to get a visual representation of the differences.
+
+```{r pairwise constituent comparison}
+var.labs <- c("Blue-green algae", "Chlorophyll", "FDOM", "Nitrate", "Turbidity")
+names(var.labs) <- c("bga", "chl", "fdom", "n03", "turb")
+
+# create a color palette that maps to the variable names
+myColors <- brewer.pal(5,"Dark2")
+names(myColors) <- c("bga", "fdom", "turb", "n03", "chl")
+
+# create a list of all possible variable pairs
+pairs <- list(c("bga", "chl"), c("bga", "fdom"), c("bga", "n03"), 
+              c("bga", "turb"), c("chl", "fdom"), c("chl", "n03"),
+              c("chl", "turb"), c("fdom", "n03"), c("fdom", "turb"), 
+              c("n03", "turb"))
+
+# make a list of plots of the variable pairs with lines connecting
+# corresponding points (same storm, different constituent)
+plots <- list()
+for(i in 1:10){
+  pair <- pairs[[i]]
+  p <- ggplot(subset( eventsFinal2, var %in% pair), 
+         aes(x = HI, y = Slope, group = as.factor(startDate), col = var)) +
+        geom_hline(yintercept=0, linetype="dashed", color = "black") +
+        geom_vline(xintercept=0, linetype="dashed", color = "black") +
+        geom_line(col = "grey") +
+        geom_point() + xlim(c(-1,1)) + ylim(c(-1, 1)) + xlab("Hysteresis Index") +
+        scale_color_manual(name = "Constituent", values = myColors, labels = var.labs) +
+        theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) 
+  plots[[i]] <- p
+}
+
+#ggarrange(plots[[1]], plots[[2]], plots[[3]], plots[[4]])
+#ggarrange(plots[[1]], plots[[5]], plots[[6]], plots[[7]])
+#ggarrange(plots[[2]], plots[[5]], plots[[7]], plots[[8]])
+#ggarrange(plots[[4]], plots[[7]], plots[[9]], plots[[10]])
+#ggarrange(plots[[3]], plots[[6]], plots[[8]], plots[[10]])
+
+#png(filename = "bga-chl.png", width = 6, height = 4, 
+    #res = 300, units = "in", bg = "transparent")
+plots[[1]]
+#dev.off()
+
+plots[[2]]
+plots[[3]]
+plots[[4]]
+plots[[5]]
+plots[[6]]
+
+#png(filename = "chl-turb.png", width = 6, height = 4, 
+    #res = 300, units = "in", bg = "transparent")
+plots[[7]]
+#dev.off()
+
+plots[[8]]
+plots[[9]]
+plots[[10]]
+```
+
+After looking at the pairwise comparison plots, it might also be interesting to take a more quantitative approach by computnig a distance matrix between constituents for each storm, where the entries represent the average of the euclidean distances between two constituents for each storm. We can plot this information as a heatmap.
+
+```{r distance matrix}
+# function which, given 2 sets of HI and slope values,
+# returns the Euclidean distance between the 2
+dist <- function(HI_1, HI_2, slope_1, slope_2){
+  return(sqrt((HI_1-HI_2)^2 + (slope_1-slope_2)^2))
+}
+
+# remove events where we don't have HI and slope for all constituents
+# (may want to figure out a way to put these back in and use 
+# just the constituents that are available)
+eventsUnique4 <- eventsUnique2[-c(15, 16),]
+# list of the constituents
+vars <- c("bga", "chl", "fdom", "n03", "turb")
+# initialize the distance array for individual events
+distsAll <- array(dim = c(nrow(eventsUnique4), 6, 6), 
+                  dimnames = list(NULL, c(vars, "startDate"), c(vars, "startDate")))
+# initialize the average distance matrix
+dists <- matrix(nrow = 5, ncol = 5, data = 0)
+
+# for each event, add the appropriate distance to each
+# slot in the matrix
+minDist <- 2*sqrt(2)
+maxDist <- 0
+for(i in 1:nrow(eventsUnique4)){
+  for(j in 1:5){
+    for(k in 1:5){
+      distance <- dist(eventsUnique4[[i,paste0("HI_", vars[j])]], 
+             eventsUnique4[[i,paste0("HI_", vars[k])]],
+             eventsUnique4[[i,paste0("Slope_", vars[j])]],
+             eventsUnique4[[i,paste0("Slope_", vars[k])]])
+      dists[j,k] <- dists[j,k] + distance
+      distsAll[i, j, k] <- distance
+      distsAll[i,j,6] <- eventsUnique4[[i,1]]
+      distsAll[i,6,k] <- eventsUnique4[[i,1]]
+     if(distance < minDist) minDist <- distance
+     if(distance > maxDist) maxDist <- distance
+    }
+  }
+}
+# divide by the number of events to obtain average distances
+dists <- dists/nrow(eventsUnique4)
+
+rownames(dists) <- c("BGA", "CHL", "FDOM", "NO3", "TURB")
+colnames(dists) <- c("BGA", "CHL", "FDOM", "NO3", "TURB")
+
+
+
+# data wrangling in preparation for heatmap plotting
+#dists_t <- t(dists)
+dists[upper.tri(dists, diag = T)] <- NA
+
+dists_df <- dists %>%
+  as_tibble() %>%
+  rowid_to_column(var="X") %>%
+  gather(key="Y", value="Distance", -1) %>% 
+  mutate(X = case_when(X == 1 ~ "BGA",
+                       X == 2 ~ "CHL",
+                       X == 3 ~ "FDOM",
+                       X == 4 ~ "NO3",
+                       X == 5 ~ "TURB"))
+
+
+
+png(filename = "dist_heatmap_vir.png", width = 8, height = 6,
+    unit = "in", res = 300, bg = "transparent")
+# heatmap of the distance matrix
+ggplot(dists_df, aes(x = X, y = Y, fill = Distance)) + 
+  geom_tile(col = "grey") +
+  geom_shadowtext(aes(label=round(Distance, digits = 3)), col = "white") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     legend.position = c(.9, .75)) +
+  #scale_fill_continuous(na.value = 'white') +
+  scale_fill_viridis_c(na.value = "white") +
+  xlab("") + ylab("") +
+  scale_x_discrete(limits = (rev(levels(as.factor(dists_df$X))))[1:4]) +
+  scale_y_discrete(limits = (levels(as.factor(dists_df$Y)))[1:4])
+dev.off()
+
+png(filename = "dist_heatmap2.png", width = 8, height = 6,
+    unit = "in", res = 300, bg = "transparent")
+# heatmap of the distance matrix
+ggplot(dists_df, aes(x = X, y = Y, fill = Distance)) + 
+  geom_tile(col = "grey") +
+  geom_shadowtext(aes(label=round(Distance, digits = 3)), col = "white") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) +
+  #scale_fill_continuous(na.value = 'white') +
+  scale_fill_viridis_c(na.value = "white") +
+  xlab("") + ylab("") +
+  scale_x_discrete(limits = (rev(levels(as.factor(dists_df$X))))) +
+  scale_y_discrete(limits = (levels(as.factor(dists_df$Y))))
+dev.off()
+  
+```
+
+It might also be interesting to look at the distance matrices for just HI and just slope and see if there are any interesting differences there.
+```{r HI dist matrix}
+# initialize the distance matrix
+distsHI <- matrix(nrow = 5, ncol = 5, data = 0)
+# list of the constituents
+vars <- c("bga", "chl", "fdom", "n03", "turb")
+# for each event, add the appropriate distance to each
+# slot in the matrix
+for(i in 1:nrow(eventsUnique4)){
+  for(j in 1:5){
+    for(k in 1:5){
+      distsHI[j,k] <- distsHI[j,k] + 
+          abs(eventsUnique4[[i,paste0("HI_", vars[j])]] - 
+              eventsUnique4[[i, paste0("HI_", vars[k])]])
+    }
+  }
+}
+# divide by the number of events to obtain average distances
+distsHI <- distsHI/nrow(eventsUnique4)
+
+rownames(distsHI) <- c("BGA", "CHL", "FDOM", "NO3", "TURB")
+colnames(distsHI) <- c("BGA", "CHL", "FDOM", "NO3", "TURB")
+
+
+
+# data wrangling in preparation for heatmap plotting
+#dists_t <- t(dists)
+distsHI[upper.tri(distsHI, diag = T)] <- NA
+
+distsHI_df <- distsHI %>%
+  as_tibble() %>%
+  rowid_to_column(var="X") %>%
+  gather(key="Y", value="Distance", -1) %>% 
+  mutate(X = case_when(X == 1 ~ "BGA",
+                       X == 2 ~ "CHL",
+                       X == 3 ~ "FDOM",
+                       X == 4 ~ "NO3",
+                       X == 5 ~ "TURB"))
+
+
+# heatmap of the distance matrix
+HIdist <- ggplot(distsHI_df, aes(x = X, y = Y, fill = Distance)) + 
+  geom_tile(col = "grey") +
+  geom_text(aes(label=round(Distance, digits = 3)), col = "white") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     legend.position = c(.9, .75)) +
+  #scale_fill_continuous(na.value = 'white') +
+  scale_fill_viridis_c(na.value = "white", limits = c(0,1)) +
+  xlab("") + ylab("") +
+  scale_x_discrete(limits = (rev(levels(as.factor(dists_df$X))))[1:4]) +
+  scale_y_discrete(limits = (levels(as.factor(dists_df$Y)))[1:4])
+
+```
+
+```{r slope dist matrix}
+# initialize the distance matrix
+distsS <- matrix(nrow = 5, ncol = 5, data = 0)
+# list of the constituents
+vars <- c("bga", "chl", "fdom", "n03", "turb")
+# for each event, add the appropriate distance to each
+# slot in the matrix
+for(i in 1:nrow(eventsUnique4)){
+  for(j in 1:5){
+    for(k in 1:5){
+      distsS[j,k] <- distsS[j,k] + 
+          abs(eventsUnique4[[i,paste0("Slope_", vars[j])]] - 
+              eventsUnique4[[i, paste0("Slope_", vars[k])]])
+    }
+  }
+}
+# divide by the number of events to obtain average distances
+distsS <- distsS/nrow(eventsUnique4)
+
+rownames(distsS) <- c("BGA", "CHL", "FDOM", "NO3", "TURB")
+colnames(distsS) <- c("BGA", "CHL", "FDOM", "NO3", "TURB")
+
+
+
+# data wrangling in preparation for heatmap plotting
+#dists_t <- t(dists)
+distsS[upper.tri(distsS, diag = T)] <- NA
+
+distsS_df <- distsS %>%
+  as_tibble() %>%
+  rowid_to_column(var="X") %>%
+  gather(key="Y", value="Distance", -1) %>% 
+  mutate(X = case_when(X == 1 ~ "BGA",
+                       X == 2 ~ "CHL",
+                       X == 3 ~ "FDOM",
+                       X == 4 ~ "NO3",
+                       X == 5 ~ "TURB"))
+
+
+# heatmap of the distance matrix
+slopeDist <- ggplot(distsS_df, aes(x = X, y = Y, fill = Distance)) + 
+  geom_tile(col = "grey") +
+  geom_text(aes(label=round(Distance, digits = 3)), col = "white") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     legend.position = c(.9, .75)) +
+  #scale_fill_continuous(na.value = 'white') +
+  scale_fill_viridis_c(na.value = "white", limits = c(0,1)) +
+  xlab("") + ylab("") +
+  scale_x_discrete(limits = (rev(levels(as.factor(distsS_df$X))))[1:4]) +
+  scale_y_discrete(limits = (levels(as.factor(distsS_df$Y)))[1:4])
+
+ggarrange(HIdist, slopeDist, bothDist, common.legend = T)
+
+```
+
+```{r distribution of distances}
+bga_dists <- as_tibble(distsAll[,1,]) %>% 
+  mutate(startDate = as.Date(startDate, origin = "1970-01-01"))
+chl_dists <- as_tibble(distsAll[,2,]) %>% 
+  mutate(startDate = as.Date(startDate, origin = "1970-01-01"))
+fdom_dists <- as_tibble(distsAll[,3,]) %>% 
+  mutate(startDate = as.Date(startDate, origin = "1970-01-01"))
+n03_dists <- as_tibble(distsAll[,4,]) %>% 
+  mutate(startDate = as.Date(startDate, origin = "1970-01-01"))
+turb_dists <- as_tibble(distsAll[,5,]) %>% 
+  mutate(startDate = as.Date(startDate, origin = "1970-01-01"))
+
+png(filename = "bga_chl_hist.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+par(bg = "transparent")
+hist(bga_dists$chl, main = "", xlab = "Distance", ylab = "Number of Events",
+     breaks = 8)
+dev.off()
+
+hist(bga_dists$chl, xlim = c(0, 2), breaks = seq(from = 0, to = 2, by = 0.2))
+hist(bga_dists$fdom, xlim = c(0, 2), breaks = seq(from = 0, to = 2, by = 0.2))
+hist(bga_dists$n03, xlim = c(0, 2), breaks = seq(from = 0, to = 2, by = 0.2))
+hist(bga_dists$turb, xlim = c(0, 2), breaks = seq(from = 0, to = 2, by = 0.2))
+```
+
+
+Next, we might want to explore how the pairwise differences between constituents vary between events. This is where the event metrics come in. One idea we wanted to explore based on the pairwise analyses above was whether seasonality was driving the differences between chlorophyll and bga responses. We hypothesized that the events later in the summer/fall might have larger differences as bga might be accounting for a smaller proportion of the chlorophyll in the river at this point. Here are some plots that show the differences between HI and slope for bga and chl throughout the year:
+
+```{r bga/chl distance over time}
+bga_chl_both <- eventsUnique4 %>% 
+  mutate(dist_chl_bga = sqrt((HI_chl - HI_bga)^2 + (Slope_chl - Slope_bga)^2),
+         dist_chl_fdom = sqrt((HI_chl - HI_fdom)^2 + (Slope_chl - Slope_fdom)^2),
+         dist_chl_n03 = sqrt((HI_chl - HI_n03)^2 + (Slope_chl - Slope_n03)^2),
+         dist_chl_turb = sqrt((HI_chl - HI_turb)^2 + (Slope_chl - Slope_turb)^2))
+
+png(filename = "bga_chl_dist_time.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+bga_chl_both %>% 
+  ggplot(aes(x = as.Date(yday(startDate), origin = as.Date("2015-01-01")), 
+             y = dist_chl_bga,
+             col = as.factor(year(startDate)))) +
+  geom_point(cex = 2) + theme_bw() +
+  scale_x_date(date_labels = "%b %d") +
+  xlab("Start date") + ylab("Distance") +
+  scale_color_brewer(name = "Year", palette = "Dark2") + 
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+
+bga_chl_both %>% 
+  ggplot(aes(x = as.Date(yday(startDate), origin = as.Date("2015-01-01")), 
+             y = dist_chl_fdom,
+             col = as.factor(year(startDate)))) +
+  geom_point(cex = 2) + theme_bw() +
+  scale_x_date(date_labels = "%b %d") +
+  xlab("Start date") + ylab("Distance") +
+  scale_color_brewer(name = "Year", palette = "Dark2") + 
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+
+bga_chl_both %>% 
+  ggplot(aes(x = as.Date(yday(startDate), origin = as.Date("2015-01-01")), 
+             y = dist_chl_n03,
+             col = as.factor(year(startDate)))) +
+  geom_point(cex = 2) + theme_bw() +
+  scale_x_date(date_labels = "%b %d") +
+  xlab("Start date") + ylab("Distance") +
+  scale_color_brewer(name = "Year", palette = "Dark2") + 
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+
+bga_chl_both %>% 
+  ggplot(aes(x = as.Date(yday(startDate), origin = as.Date("2015-01-01")), 
+             y = dist_chl_turb,
+             col = as.factor(year(startDate)))) +
+  geom_point(cex = 2) + theme_bw() +
+  scale_x_date(date_labels = "%b %d") +
+  xlab("Start date") + ylab("Distance") +
+  scale_color_brewer(name = "Year", palette = "Dark2") + 
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+
+
+  
+
+bga_chl_both %>% 
+  ggplot(aes(x = yday(startDate), y = dist_chl_bga)) +
+  geom_point() + theme_bw() + 
+  scale_y_log10() + scale_x_log10() +
+  geom_smooth(method = 'lm', se = F)
+```
+
+```{r n03/chl distance over time}
+n03_chl_both <- eventsUnique[,c(1, 3, 5, 8, 11, 12, 13, 14)] %>% 
+  mutate(dist_chl_n03 = sqrt((HI_chl - HI_n03)^2 + (Slope_chl - Slope_n03)^2))
+
+n03_chl_both %>% 
+  ggplot(aes(x = as.Date(yday(startDate), origin = as.Date("2015-01-01")), 
+             y = dist_chl_n03,
+             col = as.factor(year(startDate)))) +
+  geom_point() + theme_bw() +
+  #scale_x_date(date_labels = "%b %d") +
+  xlab("Start date") + ylab("Distance") +
+  scale_color_brewer(name = "Year", palette = "Dark2")
+  #scale_color_manual(name = "Year", values = brewer.pal(6, "Blues")[3:6])
+n03_chl_both %>% 
+  ggplot(aes(x = as.Date(yday(startDate), origin = as.Date("2015-01-01")))) +
+  geom_point(aes(y = HI_n03-HI_chl, color = "HI")) +
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  geom_point(aes(y = Slope_n03-Slope_chl, color = "Slope")) +
+  scale_color_manual(name = "", values = c("HI" = "black", "Slope" = "blue")) +
+  xlab("Start date") + ylab("Difference (NO3 - CHL)") +
+  theme_bw() 
+  
+```
+
+## Clustering
+
+Here I try a few clustering analyses with HI/slope as well as with event metrics. This is just exploratory, and didn't produce much in the way of interesting results. 
+
+Clustering with just hysteresis index and slope:
+```{r clusters with hi and slope}
+turbDat <- eventsFinal2 %>% filter(var == "turb")
+hi_slope_dist_turb <- dist(turbDat[, c(10,11)])
+hi_slope_complete_turb <- hclust(hi_slope_dist_turb, method = "complete")
+plot(hi_slope_complete_turb, labels = turbDat$startDate)
+hi_slope_turb_3 <- cutree(hi_slope_complete_turb, k = 3)
+
+plot(x = turbDat$HI, y = turbDat$Slope, col = hi_slope_turb_3, pch = 20)
+abline( h = 0, lty = 2, col = "red") ; abline(v = 0, lty = 2, col = "red")
+
+
+n03Dat <- eventsFinal2 %>% filter(var == "n03")
+hi_slope_dist_n03 <- dist(n03Dat[, c(10,11)])
+hi_slope_complete_n03 <- hclust(hi_slope_dist_n03, method = "single")
+plot(hi_slope_complete_n03, labels = n03Dat$startDate)
+hi_slope_n03_2 <- cutree(hi_slope_complete_n03, k = 2)
+
+plot(x = n03Dat$HI, y = n03Dat$Slope, col = hi_slope_n03_2, pch = 20)
+abline( h = 0, lty = 2, col = "red") ; abline(v = 0, lty = 2, col = "red")
+
+
+chlDat <- eventsFinal2 %>% filter(var == "chl")
+hi_slope_dist_chl <- dist(chlDat[, c(10,11)])
+hi_slope_complete_chl <- hclust(hi_slope_dist_chl, method = "single")
+plot(hi_slope_complete_chl, labels = chlDat$startDate)
+hi_slope_chl_3 <- cutree(hi_slope_complete_chl, k = 3)
+
+plot(x = chlDat$HI, y = chlDat$Slope, col = hi_slope_chl_3, pch = 20)
+abline( h = 0, lty = 2, col = "red") ; abline(v = 0, lty = 2, col = "red")
+
+
+fdomDat <- eventsFinal2 %>% filter(var == "fdom")
+hi_slope_dist_fdom <- dist(fdomDat[, c(10,11)])
+hi_slope_complete_fdom <- hclust(hi_slope_dist_fdom, method = "single")
+plot(hi_slope_complete_fdom, labels = fdomDat$startDate)
+hi_slope_fdom_4 <- cutree(hi_slope_complete_fdom, k = 4)
+
+plot(x = fdomDat$HI, y = fdomDat$Slope, col = hi_slope_fdom_4, pch = 20)
+abline( h = 0, lty = 2, col = "red") ; abline(v = 0, lty = 2, col = "red")
+
+bgaDat <- eventsFinal2 %>% filter(var == "bga")
+hi_slope_dist_bga <- dist(bgaDat[, c(10,11)])
+hi_slope_complete_bga <- hclust(hi_slope_dist_bga, method = "single")
+plot(hi_slope_complete_bga, labels = bgaDat$startDate)
+hi_slope_bga_2 <- cutree(hi_slope_complete_bga, k = 2)
+
+plot(x = bgaDat$HI, y = bgaDat$Slope, col = hi_slope_bga_2, pch = 20)
+abline( h = 0, lty = 2, col = "red") ; abline(v = 0, lty = 2, col = "red")
+```
+
+```{r clusters with hi/slope for all variables}
+hi_slope_dist <- dist(eventsFinal2[, c(10,11)])
+hi_slope_complete <- hclust(hi_slope_dist, method = "complete")
+plot(hi_slope_complete, labels = eventsFinal2$startDate)
+hi_slope_5 <- cutree(hi_slope_complete, k = 5)
+
+plot(x = eventsFinal2$HI, y = eventsFinal2$Slope, 
+     col = hi_slope_5, pch = eventsFinal2$var,)
+abline( h = 0, lty = 2, col = "red") ; abline(v = 0, lty = 2, col = "red")
+```
+
+
+```{r clusters with all variables HI/slope}
+# need to fix this because of the weird fdom event 
+# (only fixed in the eventsFinal df, not the eventsUnique one)
+allVar_hi_dist <- dist(eventsUnique[, c(9, 11, 13, 15)])
+allVar_hi_complete <- hclust(allVar_hi_dist, method = "complete")
+plot(allVar_hi_complete, labels = eventsUnique$startDate)
+
+allVar_hi_3 <- cutree(allVar_hi_complete, k = 3)
+pairs(eventsUnique[, c(9, 11, 13, 15)], panel = function(x,y) text(x, y, allVar_hi_3))
+
+allVar_slope_dist <- dist(eventsUnique[,c(10, 12, 14, 16)])
+allVar_slope_complete <- hclust(allVar_slope_dist, method = "complete")
+plot(allVar_slope_complete, labels = eventsUnique$startDate)
+
+
+allVar_dist <- dist(eventsUnique[, -c(1:8)])
+allVar_complete <- hclust(allVar_dist, method = "complete")
+plot(allVar_complete, labels = eventsUnique$startDate)
+
+allVar_3 <- cutree(allVar_complete, k = 3)
+pairs(eventsUnique[, -c(1:8)], panel = function(x,y) text(x, y, allVar_3))
+```
+
+```{r clustering events by stats}
+events_dist <- dist(eventsUnique[,c(5, 7, 8)])
+events_complete <- hclust(events_dist, method = "complete")
+plot(events_complete, labels = eventsUnique$startDate)
+
+events_3 <- cutree(events_complete, k = 3)
+pairs(eventsUnique[, c(5, 7, 8)], panel = function(x,y) text(x, y, events_3))
+```
+
+```{r example plot for storm ID}
+
+
+ggplot(discharge_2017, aes(x = date, y = discharge)) + 
+  geom_line() + xlab("Time") + ylab("Discharge (ft^3/s)") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+
+png(filename = "stormID_2016.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+ggplot(discharge_2016, aes(x = date, y = discharge)) + 
+  geom_line() + xlab("Time") + ylab("Discharge (ft^3/s)") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) +
+  geom_point(data = tibble(X = c(ymd("2016-04-25"), ymd("2016-07-13"), ymd("2016-06-01"), 
+                   ymd("2016-08-10"),ymd("2016-09-06"), ymd("2016-09-20")),
+              Y = c(34500, 32500, 46000, 36700, 43900, 50800)), aes(x = X, y = Y), col = "red", cex = 2)
+dev.off()
+  
+```
+
+```{r bagplots}
+library(aplpack)
+
+bagplot(x = eventsTurb$HI, y = eventsTurb$Slope,
+        xlim = c(-1, 1), ylim = c(-1, 1), show.whiskers = T)
+abline(h = 0, col = "forestgreen", lty = 2)
+abline(v = 0, col = "forestgreen", lty = 2)
+
+bagplot(x = eventsBGA$HI, y = eventsBGA$Slope,
+        xlim = c(-1, 1), ylim = c(-1, 1), show.whiskers = T)
+abline(h = 0, col = "forestgreen", lty = 2)
+abline(v = 0, col = "forestgreen", lty = 2)
+
+bagplot(x = eventsChl$HI, y = eventsChl$Slope,
+        xlim = c(-1, 1), ylim = c(-1, 1), show.whiskers = T)
+abline(h = 0, col = "forestgreen", lty = 2)
+abline(v = 0, col = "forestgreen", lty = 2)
+
+bagplot(x = eventsFDOM$HI, y = eventsFDOM$Slope,
+        xlim = c(-1, 1), ylim = c(-1, 1), show.whiskers = T)
+abline(h = 0, col = "forestgreen", lty = 2)
+abline(v = 0, col = "forestgreen", lty = 2)
+
+bagplot(x = eventsN03$HI, y = eventsN03$Slope,
+        xlim = c(-1, 1), ylim = c(-1, 1), show.whiskers = T)
+abline(h = 0, col = "forestgreen", lty = 2)
+abline(v = 0, col = "forestgreen", lty = 2)
+
+```
+

@@ -1,0 +1,200 @@
+---
+title: "Backwater events"
+author: "Taryn Waite"
+date: "7/21/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r function for adding events}
+# adds a high-discharge event to the events tibble,
+# given the data, start date, end date, and number of
+# observations per day
+add.event.SI <- function(data, Site, start, end, freq){
+  # subset the data to include just the event
+  subset <- data %>% 
+    filter(dateTime >= ymd_hm(start) & dateTime <= ymd_hm(end)) %>% 
+    filter(site == Site)
+  # add rising or falling limb column
+  peakDate <- (subset %>% slice_max(hourlyDischarge))[["dateTime"]]
+  # RL if before peakDate, FL if after, peak if on peakDate
+  subset <- subset %>% 
+    mutate(limb = case_when(dateTime < peakDate ~ "RL",
+                            dateTime > peakDate ~ "FL",
+                            T ~ "peak"))
+  turb <- storm_cq(data, Site, start, end, "Turb", 20, freq)
+  n03 <- storm_cq(data, Site, start, end, "NO3_mgL", 20, freq)
+  chl <- storm_cq(data, Site, start, end, "CHLugL", 20, freq)
+  fdom <- storm_cq(data, Site, start, end, "FDOMqsu", 20, freq)
+  bga <- storm_cq(data, Site, start, end, "BGAugL", 20, freq)
+  return(events_SI %>% add_row(startDate = ymd_hm(start), endDate = ymd_hm(end),
+                     length = as.numeric(ymd_hm(end) - ymd_hm(start)), 
+                     length_loop = storm.length.loop(subset),
+                     dis_change = storm.dis.change(subset),
+                     dis_change_loop = storm.dis.change.loop(subset),
+                     max_dis = storm.max.dis(subset),
+                     avg_temp = storm.avg.temp(subset),
+                     HI_turb = turb[[2]], Slope_turb = turb[[4]], area_turb = turb[[3]],
+                     HI_n03 = n03[[2]], Slope_n03 = n03[[4]], area_n03 = n03[[3]],
+                     HI_chl = chl[[2]], Slope_chl = chl[[4]], area_chl = chl[[3]],
+                     HI_fdom = fdom[[2]], Slope_fdom = fdom[[4]], area_fdom = fdom[[3]],
+                     HI_bga = bga[[2]], Slope_bga = bga[[4]], area_bga = bga[[3]]))
+}
+```
+
+```{r looking at the raw data}
+varNames <- c("BGAugL", "CHLugL", "FDOMqsu", "NO3_mgL", "Turb")
+eventDates <- matrix(c("2016-04-25-00-00", "2016-05-24-23-59",
+                       "2016-07-13-00-00", "2016-08-10-23-59",
+                       "2016-06-01-00-00", "2016-06-14-23-59",
+                       "2016-08-10-00-00", "2016-09-05-23-59",
+                       "2016-09-06-00-00", "2016-09-20-23-59",
+                       "2015-07-06-00-00", "2015-07-28-23-59",
+                       "2017-06-14-00-00", "2017-06-28-23-59",
+                       "2015-09-17-00-00", "2015-09-24-23-59",
+                       "2015-09-09-00-00", "2015-09-17-23-59",
+                       "2018-09-03-00-00", "2018-09-15-23-59",
+                       "2015-08-18-00-00", "2015-09-04-23-59"), 
+                     nrow = 11, ncol = 2, byrow = T)
+figs <- list()
+for(d in 1:11){
+  figs[[d]] <- list()
+  start <- eventDates[d,1]
+  end <- eventDates[d,2]
+  for(i in 1:5){
+    y <- trend.cq.df(WQ_hourly_discharge, "SI", varNames[i],
+                         start, end, 12)
+    figs[[d]][[i]] <- plot.smooth.cq(y, varNames[i])
+  }
+}
+
+for(d in 1:11){
+  png(filename = paste0("SI_test/", eventDates[d,1], ".png"), width = 6, height = 4, 
+      units = "in", res = 300)
+  print(ggarrange(figs[[d]][[1]], figs[[d]][[2]], figs[[d]][[3]], figs[[d]][[4]], figs[[d]][[5]]))
+  dev.off()
+}
+
+
+```
+
+
+```{r adding events}
+# initialize the tibble
+events_SI <- tibble(startDate = Date(), endDate = Date(), 
+                 length = numeric(), length_loop = numeric(),
+                 dis_change = numeric(), dis_change_loop = numeric(),
+                 max_dis = numeric(), avg_temp = numeric(),
+                 HI_turb = numeric(), Slope_turb = numeric(), area_turb = numeric(),
+                 HI_n03 = numeric(), Slope_n03 = numeric(), area_n03 = numeric(),
+                 HI_chl = numeric(), Slope_chl = numeric(), area_chl = numeric(),
+                 HI_fdom = numeric(), Slope_fdom = numeric(), area_fdom = numeric(),
+                 HI_bga = numeric(), Slope_bga = numeric(), area_bga = numeric())
+
+# add events -- this takes a long time to run 
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-04-25-00-00", "2016-05-24-23-59", 12)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-07-13-00-00", "2016-08-10-23-59", 12)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-06-01-00-00", "2016-06-14-23-59", 12)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-08-10-00-00", "2016-09-05-23-59", 12)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-09-06-00-00", "2016-09-20-23-59", 12)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2015-07-06-00-00", "2015-07-28-23-59", 24)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-06-14-00-00", "2017-06-28-23-59", 12)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2015-09-17-00-00", "2015-09-24-23-59", 24)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2015-09-09-00-00", "2015-09-17-23-59", 24)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2018-09-03-00-00", "2018-09-15-23-59", 12)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2015-08-18-00-00", "2015-09-04-23-59", 24)
+ 
+# events with missing data
+# missing 45 rows
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-09-20-00-00", "2016-10-15-23-59", 12)
+# missing 80 rows (7/22 - end)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-19-00-00", "2017-07-25-23-59", 24)
+# missing all data
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-26-00-00", "2017-07-30-23-59", 24)
+# missing all data
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-06-00-00", "2017-08-13-23-59", 24)
+# missing most data (all except first 32 rows)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-09-20-00-00", "2017-09-24-23-59", 24)
+# missing 129 rows
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2018-06-15-00-00", "2018-07-31-23-59", 12)
+# missing 227 rows (beginning until 8/25)
+events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-16-00-00", "2017-09-17-23-59", 24)
+
+# get rid of duplicate rows
+events_SI_unique <- unique(events_SI)
+
+```
+
+```{r reshaping the data}
+events_SI_Reshaped <- events_SI_unique %>% 
+  gather(key, value, -c(startDate, endDate, length, length_loop,
+                        dis_change, dis_change_loop, max_dis, avg_temp)) %>% 
+  separate(key, c("measure", "var"), "_") %>% 
+  tidyr :: spread(measure, value)
+
+# add columns for directions of hysteresis and slope
+events_SI_Final <- events_SI_Reshaped %>% 
+  mutate(H_dir = case_when(HI >= 0.05 ~ "clockwise",
+                           HI <= -0.05 ~ "counter-clockwise", T ~ "none"),
+         slope_dir = case_when(Slope >= 0.05 ~ "flushing",
+                               Slope <= -0.05 ~ "dilution", T ~ "constant"),
+         complex = case_when(area >= abs(2*HI) ~ "complex",
+                             T ~ "not complex"))
+
+```
+
+```{r plotting HI and slope}
+png(filename = "HI_slope_SI.png", 
+    width = 9, height = 6, units = "in", res = 300, bg = "transparent")
+eventsSI_Final %>% 
+  ggplot(aes(x = HI, y = Slope)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 2) +
+  theme_bw() + xlab("Hysteresis Index") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+```
+
+```{r comparison of MC and SI}
+# merge MC and SI events dataframes
+eventsMC_merge <- eventsFinal2[,-c(9, 10, 11,12)] %>% 
+  mutate(site = "MC")
+eventsSI_merge <- eventsSI_Final %>% 
+  mutate(site = "SI")
+
+events_merge <- rbind(eventsMC_merge, eventsSI_merge)
+
+events_merge %>% ggplot(aes(x = HI, y = Slope, group = as.factor(startDate), col = site)) +
+  geom_line(col = "grey") + 
+  geom_point() + 
+  facet_wrap(~var) + 
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  geom_vline(xintercept=0, linetype="dashed", color = "black") +
+  xlim(c(-1,1)) + ylim(c(-1, 1)) + xlab("Hysteresis Index") +
+  scale_color_brewer(name = "Site", labels = c("Main Channel", "Backwater"), palette = "Dark2") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) 
+
+ggplot(subset(eventsSI_Final, var %in% c("chl", "bga")),
+  aes(x = HI, y = Slope, group = as.factor(startDate), col = var)) +
+  geom_line(col = "grey") + 
+  geom_point() + 
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  geom_vline(xintercept=0, linetype="dashed", color = "black") +
+  xlim(c(-1,1)) + ylim(c(-1, 1)) + xlab("Hysteresis Index") +
+  scale_color_brewer(name = "Site", labels = c("Main Channel", "Backwater"), palette = "Dark2") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) 
+
+events_merge %>% ggplot(aes(x = var, y = HI, col = site)) +
+  geom_boxplot()
+
+events_merge %>% ggplot(aes(x = var, y = Slope, col = site)) +
+  geom_boxplot()
+```
+

@@ -1,0 +1,96 @@
+---
+title: "High frequency discharge data"
+author: "Taryn Waite"
+date: "6/17/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dataRetrieval)
+library(lubridate)
+```
+
+Discharge data collected at 15-minute increments! 
+```{r}
+unitDischarge <- readNWISuv(siteNumbers = "05378500", parameterCd="00060", startDate = "2015-06-01", endDate = "2018-10-12")
+```
+
+The WQ data is at one- or two- hour frequency (depending on the year), so we need to either summarize the 15-minute discharge data by hour or only keep one measurement per hour. Since the exact time (minutes after the hour) is not constant between years for the WQ data and doesn't always match up with a 15-minute increment, it might make more sense to summarize the discharge data by hour. However, if we do want to go with keeping one measurement per hour, we should chose the measurement that was closest in time to the WQ measurement.
+```{r}
+# add a date column and an hour column to the discharge dataframe
+unitDischarge2 <- unitDischarge %>% 
+  mutate(date = date(dateTime), hour = hour(dateTime))
+
+# create a mean hourly discharge dataframe
+discharge_mean_hourly <- unitDischarge2 %>% 
+  group_by(date, hour) %>% 
+  summarize(hourlyDischarge = mean(X_00060_00000))
+
+# create a mean 2-hourly discharge dataframe
+discharge2hours <- unitDischarge2 %>% 
+  mutate(hourGroup = case_when((hour %% 2 == 0 ) ~ (as.character(hour + 1)),
+                               T ~ as.character(hour)))
+
+discharge_mean_2hourly <- discharge2hours %>% 
+  group_by(date, hourGroup) %>% 
+  summarize(hourly2discharge = mean(X_00060_00000)) %>% 
+  rename(hour = hourGroup) %>% 
+  mutate(hour = as.integer(hour))
+
+
+
+# create a discharge dataframe where one observation is kept for each hour
+```
+
+
+
+Since different years have different WQ sampling frequencies, it makes sense to join the high frequency discharge data with the WQ data separately for each year:
+
+```{r merging with WQ}
+# add an hour column to the WQ dataframe
+all_WQ_hour <- all_WQ %>% 
+  mutate(hour = hour(dateTime))
+
+# 2015 has hourly WQ sampling frequency
+# filter for 2015 WQ data and 2015 hourly discharge data
+WQ_2015 <- all_WQ_hour %>% filter(year(date) == 2015)
+discharge_hourly_2015 <- discharge_hourly %>%  filter(year(date) == 2015)
+
+# merge discharge and WQ for all years
+WQ_hourly_discharge <- full_join(all_WQ_hour, discharge_mean_hourly, by = c("date", "hour"))
+
+# merge discharge and WQ for 2015
+WQ_hourly_discharge_2015 <- full_join(WQ_2015, discharge_mean_hourly, by = c("date", "hour"))
+
+# filter for 2016 WQ data
+WQ_2016 <- all_WQ_hour %>% filter(year(date) == 2016)
+discharge_2hourly_2016 <- discharge_mean_2hourly %>%  filter(year(date) == 2016)
+
+WQ_2hourly_discharge_2016 <- full_join(WQ_2016, discharge_2hourly_2016, 
+                                       by = c("date", "hour"))
+```
+
+Exploring the hourly data
+```{r}
+WQ_hourly_discharge %>% 
+  filter(year(date) == 2015) %>% 
+  ggplot(aes(x = dateTime, y = hourlyDischarge)) +
+  geom_line()
+
+WQ_hourly_discharge %>% 
+  filter(year(date) == 2016) %>% 
+  ggplot(aes(x = dateTime, y = hourlyDischarge)) +
+  geom_line()
+
+WQ_hourly_discharge %>% 
+  filter(year(date) == 2017) %>% 
+  ggplot(aes(x = dateTime, y = hourlyDischarge)) +
+  geom_line()
+
+WQ_hourly_discharge %>% 
+  filter(year(date) == 2018) %>% 
+  ggplot(aes(x = dateTime, y = hourlyDischarge)) +
+  geom_line()
+```
+

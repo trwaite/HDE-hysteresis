@@ -1,0 +1,140 @@
+---
+title: "Clinton, IA"
+author: "Taryn Waite"
+date: "7/22/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+clinton2015 <- read_csv("data/clinton2015.csv") %>% 
+  mutate(dateTime = mdy_hms(paste(date, time, sep = " ")))
+clinton2016 <- read_csv("data/clinton2016.csv") %>% 
+  mutate(dateTime = mdy_hms(paste(date, time, sep = " ")))
+clinton2017 <- read_csv("data/clinton2017.csv") %>% 
+  mutate(dateTime = mdy_hms(paste(date, time, sep = " ")))
+clinton2018 <- read_csv("data/clinton.csv") %>% 
+  mutate(dateTime = mdy_hms(paste(date, time, sep = " ")))
+
+clinton2018_hourly <-  clinton %>% 
+  group_by(date(dateTime), hour(dateTime)) %>% 
+  summarize(nitrate_nitrite = mean(nitrate_nitrite, na.rm = T),
+            fdom = mean(fdom, na.rm = T),
+            hourlyDischarge = mean(discharge, na.rm = T),
+            temp = mean(temp, na.rm = T),
+            temp_2 = mean(temp_2, na.rm = T),
+            turb = mean(turb, na.rm = T),
+            dateTime = mean(dateTime)) %>% 
+  mutate(site = "CL")
+
+clinton2015_hourly <-  clinton2015 %>% 
+  group_by(date(dateTime), hour(dateTime)) %>% 
+  summarize(nitrate_nitrite = mean(nitrate_nitrite, na.rm = T),
+            fdom = mean(fdom, na.rm = T),
+            hourlyDischarge = mean(discharge, na.rm = T),
+            temp = mean(temp, na.rm = T),
+            temp_2 = mean(temp_2, na.rm = T),
+            turb = mean(turb, na.rm = T),
+            dateTime = mean(dateTime)) %>% 
+  mutate(site = "CL")
+
+clinton2016_hourly <-  clinton2016 %>% 
+  group_by(date(dateTime), hour(dateTime)) %>% 
+  summarize(nitrate_nitrite = mean(nitrate_nitrite, na.rm = T),
+            fdom = mean(fdom, na.rm = T),
+            hourlyDischarge = mean(discharge, na.rm = T),
+            temp = mean(temp, na.rm = T),
+            temp_2 = mean(temp_2, na.rm = T),
+            turb = mean(turb, na.rm = T),
+            dateTime = mean(dateTime)) %>% 
+  mutate(site = "CL")
+
+clinton2017_hourly <-  clinton2017 %>% 
+  group_by(date(dateTime), hour(dateTime)) %>% 
+  summarize(nitrate_nitrite = mean(nitrate_nitrite, na.rm = T),
+            fdom = mean(fdom, na.rm = T),
+            hourlyDischarge = mean(discharge, na.rm = T),
+            temp = mean(temp, na.rm = T),
+            temp_2 = mean(temp_2, na.rm = T),
+            turb = mean(turb, na.rm = T),
+            dateTime = mean(dateTime)) %>% 
+  mutate(site = "CL")
+
+clinton2017_dis_day <- clinton2017_hourly %>% 
+  group_by(date(dateTime)) %>% 
+  summarize(discharge = mean(hourlyDischarge)) %>% 
+  rename(date = `date(dateTime)`)
+
+clinton2016_dis_day <- clinton2016_hourly %>% 
+  group_by(date(dateTime)) %>% 
+  summarize(discharge = mean(hourlyDischarge)) %>% 
+  rename(date = `date(dateTime)`)
+
+clinton2015_dis_day <- clinton2015_hourly %>% 
+  group_by(date(dateTime)) %>% 
+  summarize(discharge = mean(hourlyDischarge)) %>% 
+  rename(date = `date(dateTime)`)
+
+clinton2018_dis_day <- clinton2018_hourly %>% 
+  group_by(date(dateTime)) %>% 
+  summarize(discharge = mean(hourlyDischarge)) %>% 
+  rename(date = `date(dateTime)`)
+
+clinton2017_dis_day %>%
+  ggplot(aes(x = date, y = discharge)) +
+  geom_line()
+
+clinton2018_dis_day %>%
+  filter(date >= ymd("2018-06-04"), date <= ymd("2018-06-19")) %>% 
+  ggplot(aes(x = date, y = discharge)) +
+  geom_line()
+
+# storm_cq(clinton2018_hourly, "CL", "2018-05-04 00:00", "2018-05-17 23:59",
+# "nitrate_nitrite", 20, 24)
+
+clinton2018_hourly %>%
+  filter(dateTime >= ymd_hm("2018-05-04 00:00"), 
+         dateTime <= ymd_hm("2018-05-17 23:59")) %>% 
+  ggplot(aes(x = dateTime, y = hourlyDischarge)) +
+  geom_line()
+
+```
+
+```{r missing data visualization}
+
+par(mfrow = c(2, 3), mar = c(0,0,0,0))
+plotNA.distribution(clinton2018_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2018_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2018_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2018_hourly$nitrate_nitrite, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2018_hourly$turb, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2018_hourly$fdom, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+
+par(mfrow = c(2, 3), mar = c(0,0,0,0))
+plotNA.distribution(clinton2015_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2015_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2015_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2015_hourly$nitrate_nitrite, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2015_hourly$turb, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2015_hourly$fdom, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+
+par(mfrow = c(2, 3), mar = c(0,0,0,0))
+plotNA.distribution(clinton2016_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2016_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2016_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2016_hourly$nitrate_nitrite, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2016_hourly$turb, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2016_hourly$fdom, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+
+par(mfrow = c(2, 3), mar = c(0,0,0,0))
+plotNA.distribution(clinton2017_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2017_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2017_hourly$hourlyDischarge, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2017_hourly$nitrate_nitrite, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2017_hourly$turb, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+plotNA.distribution(clinton2017_hourly$fdom, main = "", xaxt='n', yaxt = 'n', ann=FALSE)
+```
+

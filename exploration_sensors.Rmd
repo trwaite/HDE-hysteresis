@@ -1,0 +1,252 @@
+---
+title: 'Preliminary Exploration: Sensors'
+author: "Taryn Waite"
+date: "6/4/2020"
+output: html_document
+---
+
+This document contains my preliminary exploration of the water quality sensor data and discharge data. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dataRetrieval)
+library(tidyverse)
+library(lubridate)
+```
+
+## Sensor Data Wrangling
+
+Reading in the data
+```{r read data}
+# main channel WQ data
+mc <- read_csv("data/MC_WQ.csv")
+# backwater WQ data
+si <- read_csv("data/SI_WQ.csv")
+
+# discharge data
+discharge <- readNWISdv(siteNumbers = "05378500", parameterCd="00060", startDate = "2015-04-01", endDate = "2018-10-12")
+
+```
+
+Here, I convert the date column into Date objects and also create a date-time column
+```{r date and time}
+mc <- mc %>% 
+  mutate(date = mdy(`YYYY-MM-DD`)) %>% 
+  mutate(dateTime = mdy_hms(paste(`YYYY-MM-DD`, as.character(`hh:mm`))))
+
+si <- si %>% 
+  mutate(date = ymd(`YYYY-MM-DD`)) %>% 
+  mutate(dateTime = ymd_hms(paste(`YYYY-MM-DD`, as.character(`hh:mm`))))
+```
+
+
+Below, I combine the SI and MC data into one dataframe with a column called "site" taking the value "SI" or "MC".
+```{r combining si and mc}
+# first we need a new column specifying if si or mc
+si_with_ID <- si %>% mutate(site = "SI")
+mc_with_ID <- mc %>% mutate(site = "MC")
+
+# get rid of original date and time columns
+# (don't need these anymore with new date and dateTime columns)
+si_with_ID <- si_with_ID %>% select(-c(1,2, 23))
+mc_with_ID <- mc_with_ID %>% select(-c(1,2, 23))
+
+# next we can merge the two data frames by row
+all_WQ <- bind_rows(si_with_ID, mc_with_ID)
+```
+
+
+
+## Water Quality Data Exploration 
+
+To facilitate data exploration, below I've defined a function that plots a time series of a given variable for both sites (either on one plot or side-by-side). A year and/or month and/or day can be specified; otherwise, all time series data will be plotted.
+```{r time series plot function}
+# plots time series of a given variable in the WQ dataframe
+# var (string): variable name to be plotted
+# year, month, day (optional, numeric): year, month, and day to be plotted (can specify all, some, or none)
+# if month is specified but not year, separate plots are generated for each year
+# sep (boolean): plots MC and SI on same plot if false or side-by-side plots if true
+plot_time_series_WQ <- function(var, year = NA, month = NA, day = NA, sep = F){
+  # filter for specified year
+  if(!is.na(year)){
+    all_WQ <- all_WQ %>% filter(year(date) == year)
+  }
+  # filter for specified month
+  if(!is.na(month)){
+    all_WQ <- all_WQ %>% filter(month(date) == month)
+  }
+  # filter for specified day
+  if(!is.na(day)){
+    all_WQ <- all_WQ %>% filter(day(date) == day)
+  }
+  # if sep argument is true, plot with facet wrap
+  # otherwise, plot without facet wrap
+  # also, separate by year if month is given but not year
+  if(sep & is.na(year) &!is.na(month)){
+    all_WQ %>% 
+    ggplot(aes_string(x = "dateTime", y = var, col = "site")) +
+    geom_line() +
+    facet_grid(site ~ as.factor(year(date)), scales = "free_x")
+  } else if (sep){
+    all_WQ %>% 
+    ggplot(aes_string(x = "dateTime", y = var, col = "site")) +
+    geom_line() +
+    facet_wrap(~site)
+  } else if (is.na(year) &!is.na(month)){
+    all_WQ %>% 
+    ggplot(aes_string(x = "dateTime", y = var, col = "site")) +
+    geom_line() +
+    facet_wrap(~as.factor(year(date)), scales = "free_x")
+  } else{
+    all_WQ %>% 
+    ggplot(aes_string(x = "dateTime", y = var, col = "site")) +
+    geom_line()
+  }
+}
+
+
+```
+
+```{r plotting function examples}
+# plot of nitrate for June 2018
+plot_time_series_WQ("NO3_mgL", year = 2018, month = 6)
+
+# separate plots of nitrate for all of 2018
+plot_time_series_WQ("NO3_mgL", year = 2018, sep = T)
+plot_time_series_WQ("CHLugL", year = 2018, sep = T)
+
+# plots of turbidity and nitrate for June 9, 2016
+plot_time_series_WQ("Turb", year = 2016, month = 6, day = 9)
+plot_time_series_WQ("NO3_mgL", year = 2016, month = 6, day = 9)
+
+# plots of temperature in the month of July for all years at both sites
+plot_time_series_WQ("CHLugL", month = 7, sep = T)
+```
+
+
+## Merging WQ and discharge data
+
+Below, I merge the WQ and discharge data into one dataframe that has average values of WQ variables for each day, as well as the discharge for the day.
+```{r}
+# group water quality data by date, giving dataframe with mean values for each day
+# here, I just included variables we will likely need, but may need to add more later
+daily_WQ <- all_WQ %>%
+  group_by(date, site) %>% 
+  summarise (date = mean(date), Turb = mean(Turb), CHLugL = mean(CHLugL), BGAugL = mean(BGAugL),
+             FDOMqsu = mean(FDOMqsu), NO3_mgL = mean(NO3_mgL))
+
+# select just date and discharge from discharge data, and rename date column to match WQ
+date_discharge <- discharge %>% 
+  select(c(3, 4)) %>% 
+  rename_(date = Date)
+
+# join daily WQ and discharge data and rename discharge column
+WQ_discharge <- full_join(daily_WQ, date_discharge, by = "date") %>% 
+  rename(discharge = X_00060_00003)
+
+
+```
+
+## Sumarizing periods of available WQ data
+
+```{r summarizing dates available}
+# split daily WQ by site
+daily_WQ_SI <- daily_WQ %>% 
+  filter(site == "SI")
+
+daily_WQ_MC <- daily_WQ %>% 
+  filter(site == "MC")
+
+# create a complete sequence of days from the start to end of sensor data
+all_dates <- as.tibble( seq.Date(from = ymd("2015-06-01"), 
+                                 to = ymd("2018-10-12"), by = "day")) %>% 
+  rename(date = value)
+
+# join dates with daily WQ and fill in site for NA rows
+dates_SI <- left_join(all_dates, daily_WQ_SI) %>% 
+  mutate(site = "SI") 
+
+dates_MC <- left_join(all_dates, daily_WQ_MC) %>% 
+  mutate(site = "MC")
+
+# join the 2 sites back together
+all_dates_WQ <- bind_rows(dates_SI, dates_MC)
+
+# switch values to available or not
+all_dates_available <- all_dates_WQ %>% 
+  mutate(Turb = case_when(is.na(Turb) ~ "No", T ~ "Yes"),
+         CHLugL = case_when(is.na(CHLugL) ~ "No", T ~ "Yes"),
+         BGAugL = case_when(is.na(BGAugL) ~ "No", T ~ "Yes"),
+         FDOMqsu = case_when(is.na(FDOMqsu) ~ "No", T ~ "Yes"),
+         NO3_mgL = case_when(is.na(NO3_mgL) ~ "No", T ~ "Yes")) %>% 
+  gather("variable", "value", -c(date, site))
+  
+
+## need a better way to visualize this (also, facet wrap won't work for some reason)
+all_dates_available %>% 
+  filter(site == "MC" & year(date) == 2016) %>% 
+  ggplot(aes(x = date, y = variable, col = value)) +
+  geom_point() 
+
+all_dates_available %>% 
+  filter(site == "SI") %>% 
+  ggplot(aes(x = date, y = variable, col = value)) +
+  geom_point() 
+
+```
+
+
+Below, I've defined a function for looking at just the discharge data. It plots a time series of discharge and, like with the WQ time series plotting function, you can specify a year and/or month to plot (otherwise, all data is plotted). If you specify a month but not a year, the time series for the given month will be shown on separate plots for each year.
+```{r discharge time series function}
+# plots the discharge over time
+# year, month (optional, numeric) specify the specific year and/or month to plot (if not specified, all data will be plotted)
+# if month is given but not year, all years will be plotted separately.
+plot_time_series_discharge <- function(year = NA, month = NA){
+  # filter for specified year
+  if(!is.na(year)){
+    WQ_discharge <- WQ_discharge %>% filter(year(date) == year)
+  }
+  # filter for specified month
+  if(!is.na(month)){
+    WQ_discharge <- WQ_discharge %>% filter(month(date) == month)
+  }
+  
+  # if month is specified but not year, plot each year separately
+  # otherwise, just make one plot
+  if(is.na(year) & !is.na(month)){
+    WQ_discharge %>% 
+      ggplot(aes(x = date, y = discharge)) +
+      geom_line() +
+      facet_wrap(~as.factor(year(date)), scales = "free_x")
+  } else {
+  WQ_discharge %>% 
+    ggplot(aes(x = date, y = discharge)) +
+    geom_line()
+  }
+}
+```
+
+Here are some examples of how the discharge time series plotting function is used:
+```{r testing discharge plotting function}
+# plot of all discharge data over time
+plot_time_series_discharge()
+
+# plot of discharge data from 2016
+plot_time_series_discharge(year = 2016)
+
+# plot of discharge data from June 2016
+plot_time_series_discharge(year = 2016, month = 6)
+
+# plots of discharge data from July of each year
+plot_time_series_discharge(month = 7)
+```
+
+```{r}
+all_WQ %>% 
+  filter(year(date) == 2016 & month(date) == 8 & day(date) %in% c(1)) %>% 
+  ggplot(aes(x = dateTime, y = DOsat)) + 
+  geom_line() +
+  facet_wrap(~ site, scales = "free_y")
+```
+
