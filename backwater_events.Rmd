@@ -7,6 +7,13 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggpubr)
+library(lubridate)
+source("C_Q_plotting_functions.R")
+source("event_functions.R")
+source("C_Q_plotting_functions.R")
+WQ_hourly_discharge <- read_csv("data/WQ_hourly_discharge.csv")
 ```
 
 ```{r function for adding events}
@@ -78,7 +85,7 @@ for(d in 1:11){
   dev.off()
 }
 
-
+figs[[2]][[2]]
 ```
 
 
@@ -109,19 +116,19 @@ events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2015-08-18-00-00", "2015-0
  
 # events with missing data
 # missing 45 rows
-events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-09-20-00-00", "2016-10-15-23-59", 12)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-09-20-00-00", "2016-10-15-23-59", 12)
 # missing 80 rows (7/22 - end)
-events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-19-00-00", "2017-07-25-23-59", 24)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-19-00-00", "2017-07-25-23-59", 24)
 # missing all data
-events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-26-00-00", "2017-07-30-23-59", 24)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-26-00-00", "2017-07-30-23-59", 24)
 # missing all data
-events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-06-00-00", "2017-08-13-23-59", 24)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-06-00-00", "2017-08-13-23-59", 24)
 # missing most data (all except first 32 rows)
-events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-09-20-00-00", "2017-09-24-23-59", 24)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-09-20-00-00", "2017-09-24-23-59", 24)
 # missing 129 rows
-events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2018-06-15-00-00", "2018-07-31-23-59", 12)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2018-06-15-00-00", "2018-07-31-23-59", 12)
 # missing 227 rows (beginning until 8/25)
-events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-16-00-00", "2017-09-17-23-59", 24)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-16-00-00", "2017-09-17-23-59", 24)
 
 # get rid of duplicate rows
 events_SI_unique <- unique(events_SI)
@@ -144,12 +151,24 @@ events_SI_Final <- events_SI_Reshaped %>%
          complex = case_when(area >= abs(2*HI) ~ "complex",
                              T ~ "not complex"))
 
+write_csv(events_SI_Final, "data/events_SI")
+
+# add other metrics
+events_SI_Final2 <- events_SI_Final %>% 
+  mutate(precip = mapply(totalPrecip, startDate, date(endDate), MoreArgs = list(precip2)),
+         precipYear = mapply(yearTotalPrecip, startDate, MoreArgs = list(precip2)),
+         prev_month_dis = mapply(prev.month.discharge, startDate, MoreArgs = list(unitDischarge,900)))
+
 ```
 
 ```{r plotting HI and slope}
-png(filename = "HI_slope_SI.png", 
-    width = 9, height = 6, units = "in", res = 300, bg = "transparent")
-eventsSI_Final %>% 
+# New facet label names for constituents
+var.labs <- c("Cyanobacteria", "Chlorophyll", "FDOM", "Nitrate", "Turbidity")
+names(var.labs) <- c("bga", "chl", "fdom", "n03", "turb")
+
+#png(filename = "HI_slope_SI.png", 
+    #width = 9, height = 6, units = "in", res = 300, bg = "transparent")
+events_SI_Final %>% 
   ggplot(aes(x = HI, y = Slope)) +
   geom_hline(yintercept=0, linetype="dashed", color = "red") +
   geom_vline(xintercept=0, linetype="dashed", color = "red") +
@@ -157,18 +176,88 @@ eventsSI_Final %>%
   facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 2) +
   theme_bw() + xlab("Hysteresis Index") +
   theme(plot.background = element_rect(fill = "transparent",colour = NA))
+#dev.off()
+```
+
+```{r barplots of HI and slope}
+# need to reorder the slope directions
+events_SI_Final$slope_dir <- factor(events_SI_Final$slope_dir, 
+                                 levels = c("flushing", "dilution", "constant"))
+
+# dealing with complex hysteresis status
+events_hyst_type_SI <- events_SI_Final %>% 
+  mutate(hyst_type = case_when(complex == "complex" ~ "complex",
+                               H_dir == "clockwise" ~ "clockwise",
+                               H_dir == "counter-clockwise" ~ "counter-clockwise",
+                               T ~ "no hysteresis"))
+events_hyst_type_SI$hyst_type <- factor(events_hyst_type_SI$hyst_type, 
+                                     levels = c("clockwise", "counter-clockwise", 
+                                                "complex", "no hysteresis"))
+# bar plot of hysteresis type
+hiBarSI <- events_hyst_type_SI %>% 
+  ggplot(aes(x = var, fill = hyst_type)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  scale_fill_brewer(palette = "Paired", name = "Hysteresis Type") +
+  ylab("Number of Events") + xlab("Constituent") +
+  scale_x_discrete(labels = var.labs) +
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12)) +
+  theme_bw() + 
+  theme(plot.background = element_rect(fill = "transparent", colour = NA),
+        legend.background = element_rect(fill = "transparent")) 
+
+# bar plot of slope type
+slopeBarSI <- events_SI_Final %>% 
+  ggplot(aes(x = var, fill = slope_dir)) +
+  geom_bar(position = "dodge") +
+  scale_fill_brewer(palette = "Paired", name = "Slope Type") +
+  ylab("Number of Events") + xlab("Constituent") +
+  scale_x_discrete(labels = var.labs) +
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12)) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) 
+
+# figure with both bar plots
+png(filename = "HI_slope_bar_SI.png", 
+    width = 6, height = 6, units = "in", res = 300, bg = "transparent")
+ggarrange(hiBarSI, slopeBarSI, nrow = 2)
 dev.off()
 ```
 
+
 ```{r comparison of MC and SI}
 # merge MC and SI events dataframes
-eventsMC_merge <- eventsFinal2[,-c(9, 10, 11,12)] %>% 
+eventsMC_merge <- eventsFinal2[,-c(9, 10, 11)] %>% 
   mutate(site = "MC")
-eventsSI_merge <- eventsSI_Final %>% 
+eventsSI_merge <- events_SI_Final %>% 
   mutate(site = "SI")
 
 events_merge <- rbind(eventsMC_merge, eventsSI_merge)
 
+#===== distance between MC and SI in HI-slope space =====
+dist_MC_SI_temp <-events_merge %>% 
+  gather(variable, value, -c(startDate, var, site)) %>%
+  unite(temp, site, variable) %>%
+  spread(temp, value) %>% 
+  drop_na() 
+
+dist_MC_SI_temp2 <- dist_MC_SI_temp[complete.cases(dist_MC_SI_temp),] 
+dist_MC_SI_temp3 <- dist_MC_SI_temp2[-c(4,51),]
+
+dist_MC_SI <- dist_MC_SI_temp3 %>% 
+  mutate(dist = sqrt((as.numeric(MC_HI) - as.numeric(SI_HI))^2 + (as.numeric(MC_Slope) - as.numeric(SI_Slope))^2), length = as.numeric(MC_length)) 
+
+#png(filename = "length_site_dist.png", width = 9, height = 6,
+   #units = "in", res = 300, bg = "transparent")
+dist_MC_SI %>% ggplot(aes(x = length, y = dist)) +
+  geom_point() +
+  facet_wrap(~var) +
+  xlab("Event Length") + ylab("HI-Slope Euclidean Distance") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+#dev.off()
+
+#png(filename = "HI_slope_site_comp.png", width = 9, height = 6,
+    #units = "in", res = 300, bg = "transparent")
 events_merge %>% ggplot(aes(x = HI, y = Slope, group = as.factor(startDate), col = site)) +
   geom_line(col = "grey") + 
   geom_point() + 
@@ -179,15 +268,17 @@ events_merge %>% ggplot(aes(x = HI, y = Slope, group = as.factor(startDate), col
   scale_color_brewer(name = "Site", labels = c("Main Channel", "Backwater"), palette = "Dark2") +
   theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
                      legend.background = element_rect(fill = "transparent")) 
+#dev.off()
 
-ggplot(subset(eventsSI_Final, var %in% c("chl", "bga")),
+
+ggplot(subset(events_SI_Final, var %in% c("chl", "bga")),
   aes(x = HI, y = Slope, group = as.factor(startDate), col = var)) +
   geom_line(col = "grey") + 
   geom_point() + 
   geom_hline(yintercept=0, linetype="dashed", color = "black") +
   geom_vline(xintercept=0, linetype="dashed", color = "black") +
   xlim(c(-1,1)) + ylim(c(-1, 1)) + xlab("Hysteresis Index") +
-  scale_color_brewer(name = "Site", labels = c("Main Channel", "Backwater"), palette = "Dark2") +
+  scale_color_brewer(name = "Constituent", labels = c("Chl-a", "BGA"), palette = "Dark2") +
   theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
                      legend.background = element_rect(fill = "transparent")) 
 
@@ -196,5 +287,87 @@ events_merge %>% ggplot(aes(x = var, y = HI, col = site)) +
 
 events_merge %>% ggplot(aes(x = var, y = Slope, col = site)) +
   geom_boxplot()
+```
+
+```{r}
+# multiple linear regression function for HI
+reg_multi_HI_SI <- function(variable){
+  subset <- events_SI_Final2 %>% 
+    filter(var == variable)
+  
+  return((lm(subset$HI ~ 
+             subset$dis_change + subset$length + subset$max_dis + subset$prev_month_dis +
+             subset$avg_temp + subset$precip + subset$precipYear )))
+}
+
+# multiple linear regression function for slope
+reg_multi_slope_SI <- function(variable){
+  subset <- events_SI_Final2 %>% 
+    filter(var == variable)
+  
+  return((lm(subset$Slope ~ 
+             subset$dis_change + subset$length + subset$max_dis + subset$prev_month_dis +
+             subset$avg_temp + subset$precip + subset$precipYear )))
+}
+```
+
+```{r step AIC}
+# ================ Turbidity ================
+events_SI_Turb <- events_SI_Final2 %>% filter(var == "turb")
+step(reg_multi_HI_SI("turb"))
+summary(lm(events_SI_Turb$HI ~ events_SI_Turb$max_dis +
+             events_SI_Turb$prev_month_dis + events_SI_Turb$avg_temp + 
+             events_SI_Turb$precip + events_SI_Turb$precipYear))
+step(reg_multi_slope_SI("turb"))
+summary(lm(events_SI_Turb$Slope ~ events_SI_Turb$prev_month_dis + 
+             events_SI_Turb$max_dis))
+
+# ================ Nitrate =================
+events_SI_NO3 <- events_SI_Final2 %>% filter(var == "n03")
+step(reg_multi_HI_SI("n03"))
+summary(lm(events_SI_NO3$HI ~ events_SI_NO3$dis_change + 
+             events_SI_NO3$length + events_SI_NO3$max_dis +
+             events_SI_NO3$prev_month_dis + events_SI_NO3$avg_temp +
+             events_SI_NO3$precip + events_SI_NO3$precipYear))
+step(reg_multi_slope_SI("n03"))
+summary(lm(events_SI_NO3$Slope ~ events_SI_NO3$dis_change + 
+             events_SI_NO3$length + events_SI_NO3$max_dis +
+             events_SI_NO3$prev_month_dis + events_SI_NO3$avg_temp +
+            events_SI_NO3$precipYear))
+
+# ================ FDOM =================
+events_SI_FDOM <- events_SI_Final2 %>% filter(var == "fdom")
+step(reg_multi_HI_SI("fdom"))
+summary(lm(events_SI_FDOM$HI ~ events_SI_FDOM$dis_change +
+             events_SI_FDOM$max_dis + events_SI_FDOM$prev_month_dis +
+             events_SI_FDOM$precip + events_SI_FDOM$precipYear))
+step(reg_multi_slope_SI("fdom"))
+summary(lm(events_SI_FDOM$Slope ~ events_SI_FDOM$dis_change +
+             events_SI_FDOM$max_dis + events_SI_FDOM$prev_month_dis +
+             events_SI_FDOM$precip + events_SI_FDOM$precipYear +
+             events_SI_FDOM$length + events_SI_FDOM$avg_temp))
+
+
+# ================ Chlorophyll ==================
+events_SI_chl <- events_SI_Final2 %>% filter(var == "chl")
+step(reg_multi_HI_SI("chl"))
+summary(lm(events_SI_chl$HI ~ events_SI_chl$dis_change +
+             events_SI_chl$length + events_SI_chl$max_dis +
+             events_SI_chl$prev_month_dis + events_SI_chl$precip +
+             events_SI_chl$precipYear))
+step(reg_multi_slope_SI("chl"))
+summary(lm(events_SI_chl$Slope ~ events_SI_chl$dis_change +
+             events_SI_chl$prev_month_dis + events_SI_chl$precipYear))
+
+# ================ BGA =================
+events_SI_bga <- events_SI_Final2 %>% filter(var == "bga")
+step(reg_multi_HI_SI("bga"))
+summary(lm(events_SI_bga$HI ~ events_SI_bga$dis_change +
+             events_SI_bga$length + events_SI_bga$max_dis +
+             events_SI_bga$prev_month_dis + events_SI_bga$precip +
+             events_SI_bga$precipYear))
+step(reg_multi_slope_SI("bga"))
+summary(lm(events_SI_bga$Slope ~ events_SI_bga$prev_month_dis +
+             events_SI_bga$dis_change + events_SI_bga$precip))
 ```
 
