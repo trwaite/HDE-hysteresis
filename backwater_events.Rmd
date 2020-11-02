@@ -287,6 +287,13 @@ events_merge %>% ggplot(aes(x = var, y = HI, col = site)) +
 
 events_merge %>% ggplot(aes(x = var, y = Slope, col = site)) +
   geom_boxplot()
+
+dist_MC_SI %>% ggplot(aes(x = startDate, y = dist)) +
+  geom_point() +
+  facet_wrap(~var) +
+  xlab("Start Date") + ylab("HI-Slope Euclidean Distance") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
 ```
 
 ```{r}
@@ -370,4 +377,246 @@ step(reg_multi_slope_SI("bga"))
 summary(lm(events_SI_bga$Slope ~ events_SI_bga$prev_month_dis +
              events_SI_bga$dis_change + events_SI_bga$precip))
 ```
+
+```{r single regressions}
+#====== turb slope ======
+
+# positive
+lmTurbAntDisSlope <- lm(events_SI_Turb$Slope ~ events_SI_Turb$prev_month_dis)
+png(filename = "TurbAntDisSlope.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_Turb %>% ggplot(aes(x = prev_month_dis, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Previous Month Cumulative Discharge (ft^3/s)") +
+  ylab("Slope") +
+  annotate(geom = "text", x = 170000000000, y = 0.1, hjust = 0, 
+           label = "p = 0.022", col = "blue") +
+  annotate(geom = "text", x = 170000000000, y = 0.05, hjust = 0,
+           label = "R-squared = 0.461", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmTurbAntDisSlope)
+
+#====== turb HI ======
+
+# negative
+lmTurbPeakHI <- lm(events_SI_Turb$HI ~ events_SI_Turb$max_dis)
+png(filename = "TurbPeakHI.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_Turb %>% ggplot(aes(x = max_dis, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Peak Discharge (ft^3/s)") +
+  ylab("Hysteresis Index") +
+  annotate(geom = "text", x = 70000, y = 0.35, hjust = 0, 
+           label = "p = 0.040", col = "blue") +
+  annotate(geom = "text", x = 70000, y = 0.3, hjust = 0,
+           label = "R-squared = 0.391", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmTurbPeakHI)
+
+# negative
+lmTurbAntDisHI <- lm(events_SI_Turb$HI ~ events_SI_Turb$prev_month_dis)
+png(filename = "TurbAntDisHI.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_Turb %>% ggplot(aes(x = prev_month_dis, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Peak Discharge (ft^3/s)") +
+  ylab("Hysteresis Index") +
+  annotate(geom = "text", x = 170000000000, y = 0.35, hjust = 0, 
+           label = "p = 0.029", col = "blue") +
+  annotate(geom = "text", x = 170000000000, y = 0.3, hjust = 0,
+           label = "R-squared = 0.430", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmTurbAntDisHI)
+
+#====== fdom slope ======
+
+# negative
+lmFdomPrecipYearSlope <- lm(events_SI_FDOM$Slope ~ events_SI_FDOM$precipYear)
+png(filename = "FdomPrecipYearSlope.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_FDOM %>% ggplot(aes(x = precipYear, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Cumulative Precipitation since January 1 (in)") +
+  ylab("Slope") +
+  annotate(geom = "text", x = 25, y = 0.3, hjust = 0, 
+           label = "p = 0.039", col = "blue") +
+  annotate(geom = "text", x = 25, y = 0.25, hjust = 0,
+           label = "R-squared = 0.392", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmFdomPrecipYearSlope)
+
+
+#====== fdom HI ======
+
+# negative
+lmFdomPeakHI <- lm(events_SI_FDOM$HI ~ events_SI_FDOM$max_dis)
+png(filename = "FdomPeakHI.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_FDOM %>% ggplot(aes(x = max_dis, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Peak Discharge (ft^3/s)") +
+  ylab("Hysteresis Index") +
+  annotate(geom = "text", x = 70000, y = 0.4, hjust = 0, 
+           label = "p = 0.024", col = "blue") +
+  annotate(geom = "text", x = 70000, y = 0.3, hjust = 0,
+           label = "R-squared = 0.448", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmFdomPeakHI)
+
+#====== nO3 slope ======
+
+# negative
+lmNO3PeakSlope <- lm(events_SI_NO3$Slope ~ events_SI_NO3$max_dis)
+png(filename = "NO3PeakSlope.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_NO3 %>% ggplot(aes(x = max_dis, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Peak Discharge (ft^3/s)") +
+  ylab("Slope") +
+  annotate(geom = "text", x = 70000, y = 0.15, hjust = 0, 
+           label = "p = 0.017", col = "blue") +
+  annotate(geom = "text", x = 70000, y = 0.1, hjust = 0,
+           label = "R-squared = 0.581", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmNO3PeakSlope)
+
+# negative
+lmNO3AntDisSlope <- lm(events_SI_NO3$Slope ~ events_SI_NO3$prev_month_dis)
+png(filename = "NO3AntDisSlope.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_NO3 %>% ggplot(aes(x = prev_month_dis, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Peak Discharge (ft^3/s)") +
+  ylab("Slope") +
+  annotate(geom = "text", x = 170000000000, y = 0.2, hjust = 0, 
+           label = "p = 0.062", col = "blue") +
+  annotate(geom = "text", x = 170000000000, y = 0.15, hjust = 0,
+           label = "R-squared = 0.413", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmNO3AntDisSlope)
+
+# positive
+lmNO3PrecipYearSlope <- lm(events_SI_NO3$Slope ~ events_SI_NO3$precipYear)
+png(filename = "NO3PrecipYearSlope.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_NO3 %>% ggplot(aes(x = precipYear, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Cumulative Precipitation since January 1 (in)") +
+  ylab("Slope") +
+  annotate(geom = "text", x = 25, y = 0.05, hjust = 0, 
+           label = "p = 0.038", col = "blue") +
+  annotate(geom = "text", x = 25, y = 0, hjust = 0,
+           label = "R-squared = 0.481", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmNO3PrecipYearSlope)
+
+#====== nO3 HI ======
+
+# positive
+events_SI_NO3 %>% ggplot(aes(x = max_dis, y = HI)) +
+  geom_point()
+summary(lm(events_SI_NO3$HI ~ events_SI_NO3$max_dis))
+
+# positive, not sig but maybe because of a single outlier
+events_SI_NO3 %>% ggplot(aes(x = precip, y = HI)) +
+  geom_point()
+summary(lm(events_SI_NO3$HI ~ events_SI_NO3$precip))
+
+# positive
+events_SI_NO3 %>% ggplot(aes(x = prev_month_dis, y = HI)) +
+  geom_point()
+summary(lm(events_SI_NO3$HI ~ events_SI_NO3$prev_month_dis))
+
+
+#====== chl slope ======
+
+# positive
+lmChlprevMonthDisSlope <- lm(events_SI_chl$Slope ~ events_SI_chl$prev_month_dis)
+png(filename = "ChlAntDisSlope.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_chl %>% ggplot(aes(x = prev_month_dis, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Previous Month Cumulative Discharge (ft^3/s)") +
+  ylab("Slope") +
+  annotate(geom = "text", x = 170000000000, y = 0.5, hjust = 0, 
+           label = "p = 0.007", col = "blue") +
+  annotate(geom = "text", x = 170000000000, y = 0.4, hjust = 0,
+           label = "R-squared = 0.576", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmChlprevMonthDisSlope)
+
+# negative
+lmChlPrecipYearSlope <- lm(events_SI_chl$Slope ~ events_SI_chl$precipYear)
+png(filename = "ChlPrecipYearSlope.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_chl %>% ggplot(aes(x = precipYear, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Cumulative Precipitation since January 1 (in)") +
+  ylab("Slope") +
+  annotate(geom = "text", x = 25, y = 0.3, hjust = 0, 
+           label = "p = 0.089", col = "blue") +
+  annotate(geom = "text", x = 25, y = 0.2, hjust = 0,
+           label = "R-squared = 0.287", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmChlPrecipYearSlope)
+
+
+#====== chl HI ======
+
+
+#====== bga slope ======
+
+# positive
+lmBgaAntDisSlope <- lm(events_SI_bga$Slope ~ events_SI_bga$prev_month_dis)
+png(filename = "BgaAntDisSlope.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_SI_bga %>% ggplot(aes(x = prev_month_dis, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Previous Month Cumulative Discharge (ft^3/s)") +
+  ylab("Slope") +
+  annotate(geom = "text", x = 180000000000, y = 0.1, hjust = 0, 
+           label = "p = 0.057", col = "blue") +
+  annotate(geom = "text", x = 180000000000, y = 0, hjust = 0,
+           label = "R-squared = 0.346", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmBgaAntDisSlope)
+
+
+#====== bga HI ======
+
+```
+
 
