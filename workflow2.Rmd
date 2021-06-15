@@ -1,0 +1,928 @@
+---
+title: "High Discharge Event Workflow"
+author: "Taryn Waite"
+date: "8/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(dataRetrieval)
+```
+
+This document contains the entire high discharge event (HDE) workflow, including reading in the discharge, water quality, and precipitation data, performing data wrangling, identifying HDEs, calculating slope and hysteresis index for each constituent, and statistically analyzing the resulting data. 
+
+# Data retrieval and wrangling
+
+Reading in the data
+```{r data retrieval}
+# main channel WQ data
+mc <- read_csv("data/MC_WQ.csv")
+# backwater WQ data
+si <- read_csv("data/SI_WQ.csv")
+
+# discharge data
+unitDischarge <- readNWISuv(siteNumbers = "05378500", parameterCd="00060", startDate = "2015-04-01", endDate = "2018-10-12") %>% 
+  mutate(discharge = X_00060_00000)
+
+# precip data from winona, mn 
+precip2 <- read_csv("data/daily_precip_winona.csv") %>% 
+  rename(precip = PRCP, snow = SNOW) %>% 
+  mutate(precip = as.numeric(precip), snow = as.numeric(snow),
+         Date = mdy(Date))
+
+```
+
+WQ data wrangling: Converting the date column into Date objects and also creating a date-time column
+```{r WQ date and time}
+mc <- mc %>% 
+  mutate(date = mdy(`YYYY-MM-DD`)) %>% 
+  mutate(dateTime = mdy_hms(paste(`YYYY-MM-DD`, as.character(`hh:mm`))))
+
+si <- si %>% 
+  mutate(date = ymd(`YYYY-MM-DD`)) %>% 
+  mutate(dateTime = ymd_hms(paste(`YYYY-MM-DD`, as.character(`hh:mm`))))
+```
+
+
+Combining the SI and MC data into one dataframe with a column called "site" taking the value "SI" or "MC".
+```{r combining si and mc}
+# first we need a new column specifying if si or mc
+si_with_ID <- si %>% mutate(site = "SI")
+mc_with_ID <- mc %>% mutate(site = "MC")
+
+# get rid of original date and time columns
+# (don't need these anymore with new date and dateTime columns)
+si_with_ID <- si_with_ID %>% select(-c(1,2, 23))
+mc_with_ID <- mc_with_ID %>% select(-c(1,2, 23))
+
+# next we can merge the two data frames by row
+all_WQ <- bind_rows(si_with_ID, mc_with_ID)
+```
+
+The WQ data is at one- or two- hour frequency (depending on the year), so we need to summarize the 15-minute discharge data by hour.
+```{r discharge data wrangling}
+# add a date column and an hour column to the discharge dataframe
+unitDischarge2 <- unitDischarge %>% 
+  mutate(date = date(dateTime), hour = hour(dateTime))
+
+# create a mean hourly discharge dataframe
+discharge_mean_hourly <- unitDischarge2 %>% 
+  group_by(date, hour) %>% 
+  summarize(hourlyDischarge = mean(X_00060_00000))
+```
+
+Finally, we can merge the discharge data with the water quality data, joining the dataframes by hour.
+```{r merging discharge and WQ}
+# add an hour column to the WQ dataframe
+all_WQ_hour <- all_WQ %>% 
+  mutate(hour = hour(dateTime))
+
+
+# merge discharge and WQ for all years
+WQ_hourly_discharge <- full_join(all_WQ_hour, discharge_mean_hourly, by = c("date", "hour"))
+
+```
+
+# High Discharge Event identification
+Identifying high discharge events involves a combination of visual observation of the hydrographs and quantitative analysis. I decided to use a daily rate of change threshold to flag the beginning of an event, since this does a good job of capturing the starts of HDEs that are visible in the hydrograph. Through a process of testing different thresholds and observing the points captured, I settled on a threshold of 3000 cubic feet per second per day. This means that a day is flagged as the start of an event if the difference in average discharge between the day and the next day is greater than 3000 cubic feet per second, but the difference between the day and the previous day is less than this threshold.
+
+First, we add a difference column to the daily discharge data (the difference between this day and the next day)
+```{r adding discharge difference column}
+# arrange by date
+temp <- discharge %>% 
+  rename(daily_discharge = X_00060_00003) %>% 
+  arrange(Date) 
+
+
+# calculate difference column
+temp$diff <- lead(temp$daily_discharge, 1) - temp$daily_discharge
+```
+
+Then, we flag dates that are above the threshold and for which the previous date was below the threshold.
+```{r flagging each start date}
+# flag whenever the rate of change is above the threshold
+threshold <- 3000
+storm2 <- temp %>% 
+  mutate(status = case_when(diff > threshold ~ "storm", T ~"base"))
+
+# function to test whether previous day was over threshold
+prevThresh <- function(date){
+  prevDay <- storm2 %>% filter(Date == ((date)-1))
+  #stat <- prevDay[["status"]]
+  if(nrow(prevDay) == 0) {
+    return (F)
+  }
+  if (prevDay$status == "storm"){
+    return (T)
+  } else {
+    return (F)
+  }
+}
+
+# flag where the threshold is crossed 
+# (when a point is above the threshold and the previous point is not)
+storm3 <- storm2 %>% 
+  mutate(prevDay = sapply(Date, prevThresh)) %>% 
+  mutate(crossed = !prevDay & status == "storm")
+
+# get a df of just the storm starts
+starts <- storm3 %>% filter(crossed == T & month(Date) %in% c(4, 5, 6, 7, 8, 9, 10))
+```
+
+
+
+
+# Missing Data
+
+Next, we need to fill in some missing values for the constituent time series. For time series with values missing in just a single row, we simply use the average of the previous and next values.
+```{r}
+# SI
+WQ_hourly_discharge[which(WQ_hourly_discharge$dateTime==ymd_hms("2015-09-03 12:05:00")),] %<>%
+  mutate(NO3_mgL = reassign(WQ_hourly_discharge, "NO3_mgL", ymd_hms("2015-09-03 12:05:00")),
+         Turb = reassign(WQ_hourly_discharge, "Turb", ymd_hms("2015-09-03 12:05:00")),
+         CHLugL = reassign(WQ_hourly_discharge, "CHLugL", ymd_hms("2015-09-03 12:05:00")),
+         FDOMqsu = reassign(WQ_hourly_discharge, "FDOMqsu", ymd_hms("2015-09-03 12:05:00")),
+         BGAugL = reassign(WQ_hourly_discharge, "BGAugL", ymd_hms("2015-09-03 12:05:00")),
+         Temp = reassign(WQ_hourly_discharge, "Temp", ymd_hms("2015-09-03 12:05:00")))
+
+WQ_hourly_discharge[which(WQ_hourly_discharge$dateTime==ymd_hms("2016-08-18 13:28:00")),] %<>%
+  mutate(NO3_mgL = reassign(WQ_hourly_discharge, "NO3_mgL", ymd_hms("2016-08-18 13:28:00")),
+         Turb = reassign(WQ_hourly_discharge, "Turb", ymd_hms("2016-08-18 13:28:00")),
+         CHLugL = reassign(WQ_hourly_discharge, "CHLugL", ymd_hms("2016-08-18 13:28:00")),
+         FDOMqsu = reassign(WQ_hourly_discharge, "FDOMqsu", ymd_hms("2016-08-18 13:28:00")),
+         BGAugL = reassign(WQ_hourly_discharge, "BGAugL", ymd_hms("2016-08-18 13:28:00")),
+         Temp = reassign(WQ_hourly_discharge, "Temp", ymd_hms("2016-08-16 23:28:00")))
+
+WQ_hourly_discharge[which(WQ_hourly_discharge$dateTime==ymd_hms("2016-08-16 23:28:00")),] %<>%
+  mutate(Turb = reassign(WQ_hourly_discharge, "Turb", ymd_hms("2016-08-16 23:28:00")))
+
+
+
+# main channel
+WQ_hourly_discharge[which(WQ_hourly_discharge$dateTime==ymd_hms("2017-09-12 13:13:00")),] %<>%
+  mutate(NO3_mgL = reassign(WQ_hourly_discharge, "NO3_mgL", ymd_hms("2017-09-12 13:13:00")),
+         Turb = reassign(WQ_hourly_discharge, "Turb", ymd_hms("2017-09-12 13:13:00")),
+         CHLugL = reassign(WQ_hourly_discharge, "CHLugL", ymd_hms("2017-09-12 13:13:00")),
+         FDOMqsu = reassign(WQ_hourly_discharge, "FDOMqsu", ymd_hms("2017-09-12 13:13:00")),
+         BGAugL = reassign(WQ_hourly_discharge, "BGAugL", ymd_hms("2017-09-12 13:13:00")),
+         Temp = reassign(WQ_hourly_discharge, "Temp", ymd_hms("2017-09-12 13:13:00")))
+
+WQ_hourly_discharge[which(WQ_hourly_discharge$dateTime==ymd_hms("2016-05-16 10:34:00")),] %<>%
+  mutate(NO3_mgL = reassign(WQ_hourly_discharge, "NO3_mgL", ymd_hms("2016-05-16 10:34:00")),
+         Turb = reassign(WQ_hourly_discharge, "Turb", ymd_hms("2016-05-16 10:34:00")),
+         CHLugL = reassign(WQ_hourly_discharge, "CHLugL", ymd_hms("2016-05-16 10:34:00")),
+         FDOMqsu = reassign(WQ_hourly_discharge, "FDOMqsu", ymd_hms("2016-05-16 10:34:00")),
+         BGAugL = reassign(WQ_hourly_discharge, "BGAugL", ymd_hms("2016-05-16 10:34:00")),
+         Temp = reassign(WQ_hourly_discharge, "Temp", ymd_hms("2016-05-16 10:34:00")))
+
+WQ_hourly_discharge[which(WQ_hourly_discharge$dateTime==ymd_hms("2016-10-11 10:49:00")),] %<>%
+  mutate(NO3_mgL = reassign(WQ_hourly_discharge, "NO3_mgL", ymd_hms("2016-10-11 10:49:00")),
+         Turb = reassign(WQ_hourly_discharge, "Turb", ymd_hms("2016-10-11 10:49:00")),
+         CHLugL = reassign(WQ_hourly_discharge, "CHLugL", ymd_hms("2016-10-11 10:49:00")),
+         FDOMqsu = reassign(WQ_hourly_discharge, "FDOMqsu", ymd_hms("2016-10-11 10:49:00")),
+         BGAugL = reassign(WQ_hourly_discharge, "BGAugL", ymd_hms("2016-10-11 10:49:00")),
+         Temp = reassign(WQ_hourly_discharge, "Temp", ymd_hms("2016-10-11 10:49:00")))
+
+WQ_hourly_discharge[which(WQ_hourly_discharge$dateTime==ymd_hms("2018-09-06 11:47:00")),] %<>%
+  mutate(NO3_mgL = reassign(WQ_hourly_discharge, "NO3_mgL", ymd_hms("2018-09-06 11:47:00")),
+         Turb = reassign(WQ_hourly_discharge, "Turb", ymd_hms("2018-09-06 11:47:00")),
+         CHLugL = reassign(WQ_hourly_discharge, "CHLugL", ymd_hms("2018-09-06 11:47:00")),
+         FDOMqsu = reassign(WQ_hourly_discharge, "FDOMqsu", ymd_hms("2018-09-06 11:47:00")),
+         BGAugL = reassign(WQ_hourly_discharge, "BGAugL", ymd_hms("2018-09-06 11:47:00")),
+         Temp = reassign(WQ_hourly_discharge, "Temp", ymd_hms("2018-09-06 11:47:00")))
+```
+
+# Generating event data
+First, we need to create a data structure to hold all of the event data, including the event metrics and the hysteresis index, slope, and area for each constituent.
+```{r}
+# initialize the tibble
+events <- tibble(startDate = Date(), endDate = Date(), 
+                 length = numeric(), length_loop = numeric(),
+                 dis_change = numeric(), dis_change_loop = numeric(),
+                 max_dis = numeric(), avg_temp = numeric(),
+                 HI_turb = numeric(), Slope_turb = numeric(), area_turb = numeric(),
+                 HI_n03 = numeric(), Slope_n03 = numeric(), area_n03 = numeric(),
+                 HI_chl = numeric(), Slope_chl = numeric(), area_chl = numeric(),
+                 HI_fdom = numeric(), Slope_fdom = numeric(), area_fdom = numeric(),
+                 HI_bga = numeric(), Slope_bga = numeric(), area_bga = numeric())
+
+# adds a high-discharge event to the events tibble,
+# given the data, start date, end date, and number of
+# observations per day
+add.event <- function(data, Site, start, end, freq){
+  # subset the data to include just the event
+  subset <- data %>% 
+    filter(dateTime >= ymd_hm(start) & dateTime <= ymd_hm(end)) %>% 
+    filter(site == "MC")
+  # add rising or falling limb column
+  peakDate <- (subset %>% slice_max(hourlyDischarge))[["dateTime"]]
+  # RL if before peakDate, FL if after, peak if on peakDate
+  subset <- subset %>% 
+    mutate(limb = case_when(dateTime < peakDate ~ "RL",
+                            dateTime > peakDate ~ "FL",
+                            T ~ "peak"))
+  turb <- storm_cq(data, Site, start, end, "Turb", 20, freq)
+  n03 <- storm_cq(data, Site, start, end, "NO3_mgL", 20, freq)
+  chl <- storm_cq(data, Site, start, end, "CHLugL", 20, freq)
+  fdom <- storm_cq(data, Site, start, end, "FDOMqsu", 20, freq)
+  bga <- storm_cq(data, Site, start, end, "BGAugL", 20, freq)
+  return(events %>% add_row(startDate = ymd_hm(start), endDate = ymd_hm(end),
+                     length = as.numeric(ymd_hm(end) - ymd_hm(start)), 
+                     length_loop = storm.length.loop(subset),
+                     dis_change = storm.dis.change(subset),
+                     dis_change_loop = storm.dis.change.loop(subset),
+                     max_dis = storm.max.dis(subset),
+                     avg_temp = storm.avg.temp(subset),
+                     HI_turb = turb[[2]], Slope_turb = turb[[4]], area_turb = turb[[3]],
+                     HI_n03 = n03[[2]], Slope_n03 = n03[[4]], area_n03 = n03[[3]],
+                     HI_chl = chl[[2]], Slope_chl = chl[[4]], area_chl = chl[[3]],
+                     HI_fdom = fdom[[2]], Slope_fdom = fdom[[4]], area_fdom = fdom[[3]],
+                     HI_bga = bga[[2]], Slope_bga = bga[[4]], area_bga = bga[[3]]))
+}
+```
+
+Now, we can add all of the events to the initialized tibble, using the function defined above. This takes a long time to run, so we write the tibble to a csv once it's done so that we can read the csv back in instead of re-running it.
+```{r, eval=F}
+# add events -- this takes a long time to run 
+events <- add.event(WQ_hourly_discharge, "MC", "2016-04-25-00-00", "2016-05-24-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-07-13-00-00", "2016-08-10-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-06-01-00-00", "2016-06-14-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-08-10-00-00", "2016-09-05-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-09-06-00-00", "2016-09-20-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2016-09-20-00-00", "2016-10-15-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-06-14-00-00", "2017-06-28-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-07-19-00-00", "2017-07-25-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-07-26-00-00", "2017-07-30-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-08-06-00-00", "2017-08-13-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-09-20-00-00", "2017-09-24-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2018-06-15-00-00", "2018-07-31-00-00", 12)
+events <- add.event(WQ_hourly_discharge, "MC", "2015-07-06-00-00", "2015-07-28-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2015-08-18-00-00", "2015-09-04-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2015-09-17-00-00", "2015-09-24-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2015-09-09-00-00", "2015-09-17-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2017-08-16-00-00", "2017-09-17-00-00", 24)
+events <- add.event(WQ_hourly_discharge, "MC", "2018-09-03-00-00", "2018-09-15-00-00", 12)
+
+# get rid of the duplicate rows
+# (for some reason, some of the events were added multiple times)
+eventsUnique <- distinct(events)
+
+# add precip and antecedent discharge data 
+eventsUnique2 <- eventsUnique %>% 
+  mutate(precip = mapply(totalPrecip, startDate, endDate, MoreArgs = list(precip2)),
+         precipYear = mapply(yearTotalPrecip, startDate, MoreArgs = list(precip2)),
+         prev_month_dis = mapply(prev.month.discharge, startDate, MoreArgs = list(unitDischarge,900)))
+
+# write data to csv
+write_csv(eventsUnique2, "data/events.csv")
+```
+
+```{r}
+eventsUnique2 <- read_csv("data/events.csv")
+
+```
+
+Finally, we reshape the data so that there are 4 rows for each event (one for each constituent). This makes plotting easier, so that each constituent doesn't have to be plotted separately. We also add columns for the direction of hysteresis (clockwise or counterclockwise) and slope (flushing or dilution). In Aguilera and Melack (2018), they classify clockwise hysteresis as HI >= 0.05, counterclockwise hysteresis as HI <= -0.05, flushing as $\Delta C$ >= 0.1, and dilution as $\Delta C$ <= 0.1. For now, I'm going to use 0.05 as the limit for flushing and dilution.
+
+```{r reshaping the data}
+eventsReshaped <- eventsUnique2 %>% 
+  gather(key, value, -c(startDate, endDate, length, length_loop,
+                        dis_change, dis_change_loop, max_dis, avg_temp, 
+                        precip, precipYear, prev_month_dis)) %>% 
+  separate(key, c("measure", "var"), "_") %>% 
+  tidyr::spread(measure, value)
+
+# add columns for directions of hysteresis, slope, and complexity
+eventsFinal <- eventsReshaped %>% 
+  mutate(H_dir = case_when(HI >= 0.05 ~ "clockwise",
+                           HI <= -0.05 ~ "counter-clockwise", T ~ "none"),
+         slope_dir = case_when(Slope >= 0.05 ~ "flushing",
+                               Slope <= -0.05 ~ "dilution", T ~ "constant"),
+         complex = case_when(area >= abs(2*HI) ~ "complex",
+                             T ~ "not complex"))
+# one event (starting 9/9/15) had a value >1 for fdom slope because of negative
+# values at the beginning-- might be best to take out the whole fdom row for
+# this event because the data jumps from negatives to 100 (the issue we've been 
+# looking at for the time series)
+eventsFinal2 <- eventsFinal[-c(70,87,88),]
+
+```
+
+# Version 2
+```{r}
+# initialize the tibble
+eventsV2 <- tibble(startDate = Date(), endDate = Date(), 
+                 length = numeric(), length_loop = numeric(),
+                 dis_change = numeric(), dis_change_loop = numeric(),
+                 max_dis = numeric(), avg_temp = numeric(),
+                 HI_turb = numeric(), Slope_turb = numeric(), area_turb = numeric(),
+                 HI_n03 = numeric(), Slope_n03 = numeric(), area_n03 = numeric(),
+                 HI_chl = numeric(), Slope_chl = numeric(), area_chl = numeric(),
+                 HI_fdom = numeric(), Slope_fdom = numeric(), area_fdom = numeric(),
+                 HI_bga = numeric(), Slope_bga = numeric(), area_bga = numeric(),
+                 cv_q = numeric(), cv_turb = numeric(), cv_n03 = numeric(),
+                 cv_fdom = numeric(), cv_chl = numeric(), cv_bga = numeric())
+
+# adds a high-discharge event to the events tibble,
+# given the data, start date, end date, and number of
+# observations per day
+add.eventV2 <- function(data, Site, start, end, freq){
+  # subset the data to include just the event
+  subset <- data %>% 
+    filter(dateTime >= ymd_hm(start) & dateTime <= ymd_hm(end)) %>% 
+    filter(site == "MC")
+  # add rising or falling limb column
+  peakDate <- (subset %>% slice_max(hourlyDischarge))[["dateTime"]]
+  # RL if before peakDate, FL if after, peak if on peakDate
+  subset <- subset %>% 
+    mutate(limb = case_when(dateTime < peakDate ~ "RL",
+                            dateTime > peakDate ~ "FL",
+                            T ~ "peak"))
+  turb <- storm_cq_v2(data, Site, start, end, "Turb", 20, freq)
+  n03 <- storm_cq_v2(data, Site, start, end, "NO3_mgL", 20, freq)
+  chl <- storm_cq_v2(data, Site, start, end, "CHLugL", 20, freq)
+  fdom <- storm_cq_v2(data, Site, start, end, "FDOMqsu", 20, freq)
+  bga <- storm_cq_v2(data, Site, start, end, "BGAugL", 20, freq)
+  return(eventsV2 %>% add_row(startDate = ymd_hm(start), endDate = ymd_hm(end),
+                     length = as.numeric(ymd_hm(end) - ymd_hm(start)), 
+                     length_loop = storm.length.loop(subset),
+                     dis_change = storm.dis.change(subset),
+                     dis_change_loop = storm.dis.change.loop(subset),
+                     max_dis = storm.max.dis(subset),
+                     avg_temp = storm.avg.temp(subset),
+                     HI_turb = turb[[2]], Slope_turb = turb[[4]], area_turb = turb[[3]],
+                     HI_n03 = n03[[2]], Slope_n03 = n03[[4]], area_n03 = n03[[3]],
+                     HI_chl = chl[[2]], Slope_chl = chl[[4]], area_chl = chl[[3]],
+                     HI_fdom = fdom[[2]], Slope_fdom = fdom[[4]], area_fdom = fdom[[3]],
+                     HI_bga = bga[[2]], Slope_bga = bga[[4]], area_bga = bga[[3]],
+                     cv_q = turb[[5]][1], cv_turb = turb[[5]][2], cv_n03 = n03[[5]][2],
+                     cv_fdom = fdom[[5]][2], cv_chl = chl[[5]][2], cv_bga = bga[[5]][2]))
+}
+```
+
+Now, we can add all of the events to the initialized tibble, using the function defined above. This takes a long time to run, so we write the tibble to a csv once it's done so that we can read the csv back in instead of re-running it.
+```{r, eval=F}
+# add events -- this takes a long time to run 
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2016-04-25-00-00", "2016-05-24-00-00", 12)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2016-07-13-00-00", "2016-08-10-00-00", 12)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2016-06-01-00-00", "2016-06-14-00-00", 12)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2016-08-10-00-00", "2016-09-05-00-00", 12)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2016-09-06-00-00", "2016-09-20-00-00", 12)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2016-09-20-00-00", "2016-10-15-00-00", 12)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2017-06-14-00-00", "2017-06-28-00-00", 12)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2017-07-19-00-00", "2017-07-25-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2017-07-26-00-00", "2017-07-30-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2017-08-06-00-00", "2017-08-13-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2017-09-20-00-00", "2017-09-24-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2018-06-15-00-00", "2018-07-31-00-00", 12)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2015-07-06-00-00", "2015-07-28-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2015-08-18-00-00", "2015-09-04-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2015-09-17-00-00", "2015-09-24-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2015-09-09-00-00", "2015-09-17-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2017-08-16-00-00", "2017-09-17-00-00", 24)
+eventsV2 <- add.eventV2(WQ_hourly_discharge, "MC", "2018-09-03-00-00", "2018-09-15-00-00", 12)
+
+# get rid of the duplicate rows
+# (for some reason, some of the events were added multiple times)
+eventsV2Unique <- distinct(eventsV2)
+
+# add precip and antecedent discharge data 
+eventsV2Unique2 <- eventsV2Unique %>% 
+  mutate(precip = mapply(totalPrecip, startDate, endDate, MoreArgs = list(precip2)),
+         precipYear = mapply(yearTotalPrecip, startDate, MoreArgs = list(precip2)),
+         prev_month_dis = mapply(prev.month.discharge, startDate, MoreArgs = list(unitDischarge,900)))
+
+# write data to csv
+write_csv(eventsV2Unique2, "data/eventsV2.csv")
+```
+
+```{r}
+eventsV2Unique2 <- read_csv("data/eventsV2.csv")
+
+```
+
+Finally, we reshape the data so that there are 4 rows for each event (one for each constituent). This makes plotting easier, so that each constituent doesn't have to be plotted separately. We also add columns for the direction of hysteresis (clockwise or counterclockwise) and slope (flushing or dilution). In Aguilera and Melack (2018), they classify clockwise hysteresis as HI >= 0.05, counterclockwise hysteresis as HI <= -0.05, flushing as $\Delta C$ >= 0.1, and dilution as $\Delta C$ <= 0.1. For now, I'm going to use 0.05 as the limit for flushing and dilution.
+
+```{r reshaping the data}
+eventsV2Reshaped <- eventsV2Unique2 %>% 
+  gather(key, value, -c(startDate, endDate, length, length_loop,
+                        dis_change, dis_change_loop, max_dis, avg_temp, 
+                        precip, precipYear, prev_month_dis, cv_q)) %>% 
+  separate(key, c("measure", "var"), "_") %>% 
+  tidyr::spread(measure, value)
+
+# add columns for directions of hysteresis, slope, and complexity
+eventsV2Final <- eventsV2Reshaped %>% 
+  mutate(H_dir = case_when(HI >= 0.05 ~ "clockwise",
+                           HI <= -0.05 ~ "counter-clockwise", T ~ "none"),
+         slope_dir = case_when(Slope >= 0.05 ~ "flushing",
+                               Slope <= -0.05 ~ "dilution", T ~ "constant"),
+         complex = case_when(area >= abs(2*HI) ~ "complex",
+                             T ~ "not complex"))
+# one event (starting 9/9/15) had a value >1 for fdom slope because of negative
+# values at the beginning-- might be best to take out the whole fdom row for
+# this event because the data jumps from negatives to 100 (the issue we've been 
+# looking at for the time series)
+eventsV2Final2 <- eventsV2Final[-c(70,87,88),]
+
+```
+
+
+# Raw data version
+
+```{r}
+# initialize the tibble
+eventsRaw <- tibble(startDate = Date(), endDate = Date(), 
+                 length = numeric(), length_loop = numeric(),
+                 dis_change = numeric(), dis_change_loop = numeric(),
+                 max_dis = numeric(), avg_temp = numeric(),
+                 HI_turb = numeric(), Slope_turb = numeric(), area_turb = numeric(),
+                 HI_n03 = numeric(), Slope_n03 = numeric(), area_n03 = numeric(),
+                 HI_chl = numeric(), Slope_chl = numeric(), area_chl = numeric(),
+                 HI_fdom = numeric(), Slope_fdom = numeric(), area_fdom = numeric(),
+                 HI_bga = numeric(), Slope_bga = numeric(), area_bga = numeric(),
+                 cv_q = numeric(), cv_turb = numeric(), cv_n03 = numeric(),
+                 cv_fdom = numeric(), cv_chl = numeric(), cv_bga = numeric())
+
+# adds a high-discharge event to the events tibble,
+# given the data, start date, end date, and number of
+# observations per day
+add.eventRaw <- function(data, Site, start, end, freq){
+  # subset the data to include just the event
+  subset <- data %>% 
+    filter(dateTime >= ymd_hm(start) & dateTime <= ymd_hm(end)) %>% 
+    filter(site == "MC")
+  # add rising or falling limb column
+  peakDate <- (subset %>% slice_max(hourlyDischarge))[["dateTime"]]
+  # RL if before peakDate, FL if after, peak if on peakDate
+  subset <- subset %>% 
+    mutate(limb = case_when(dateTime < peakDate ~ "RL",
+                            dateTime > peakDate ~ "FL",
+                            T ~ "peak"))
+  turb <- storm_cq_v2_raw(data, Site, start, end, "Turb", 20, freq)
+  n03 <- storm_cq_v2_raw(data, Site, start, end, "NO3_mgL", 20, freq)
+  chl <- storm_cq_v2_raw(data, Site, start, end, "CHLugL", 20, freq)
+  fdom <- storm_cq_v2_raw(data, Site, start, end, "FDOMqsu", 20, freq)
+  bga <- storm_cq_v2_raw(data, Site, start, end, "BGAugL", 20, freq)
+  return(eventsRaw %>% add_row(startDate = ymd_hm(start), endDate = ymd_hm(end),
+                     length = as.numeric(ymd_hm(end) - ymd_hm(start)), 
+                     length_loop = storm.length.loop(subset),
+                     dis_change = storm.dis.change(subset),
+                     dis_change_loop = storm.dis.change.loop(subset),
+                     max_dis = storm.max.dis(subset),
+                     avg_temp = storm.avg.temp(subset),
+                     HI_turb = turb[[2]], Slope_turb = turb[[4]], area_turb = turb[[3]],
+                     HI_n03 = n03[[2]], Slope_n03 = n03[[4]], area_n03 = n03[[3]],
+                     HI_chl = chl[[2]], Slope_chl = chl[[4]], area_chl = chl[[3]],
+                     HI_fdom = fdom[[2]], Slope_fdom = fdom[[4]], area_fdom = fdom[[3]],
+                     HI_bga = bga[[2]], Slope_bga = bga[[4]], area_bga = bga[[3]],
+                     cv_q = turb[[5]][1], cv_turb = turb[[5]][2], cv_n03 = n03[[5]][2],
+                     cv_fdom = fdom[[5]][2], cv_chl = chl[[5]][2], cv_bga = bga[[5]][2]))
+}
+```
+
+Now, we can add all of the events to the initialized tibble, using the function defined above. This takes a long time to run, so we write the tibble to a csv once it's done so that we can read the csv back in instead of re-running it.
+```{r, eval=F}
+# add events -- this takes a long time to run 
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2016-04-25-00-00", "2016-05-24-00-00", 12)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2016-07-13-00-00", "2016-08-10-00-00", 12)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2016-06-01-00-00", "2016-06-14-00-00", 12)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2016-08-10-00-00", "2016-09-05-00-00", 12)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2016-09-06-00-00", "2016-09-20-00-00", 12)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2016-09-20-00-00", "2016-10-15-00-00", 12)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2017-06-14-00-00", "2017-06-28-00-00", 12)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2017-07-19-00-00", "2017-07-25-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2017-07-26-00-00", "2017-07-30-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2017-08-06-00-00", "2017-08-13-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2017-09-20-00-00", "2017-09-24-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2018-06-15-00-00", "2018-07-31-00-00", 12)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2015-07-06-00-00", "2015-07-28-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2015-08-18-00-00", "2015-09-04-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2015-09-17-00-00", "2015-09-24-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2015-09-09-00-00", "2015-09-17-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2017-08-16-00-00", "2017-09-17-00-00", 24)
+eventsRaw <- add.eventRaw(WQ_hourly_discharge, "MC", "2018-09-03-00-00", "2018-09-15-00-00", 12)
+
+# get rid of the duplicate rows
+# (for some reason, some of the events were added multiple times)
+eventsRawUnique <- distinct(eventsRaw)
+
+# add precip and antecedent discharge data 
+eventsRawUnique2 <- eventsRawUnique %>% 
+  mutate(precip = mapply(totalPrecip, startDate, endDate, MoreArgs = list(precip2)),
+         precipYear = mapply(yearTotalPrecip, startDate, MoreArgs = list(precip2)),
+         prev_month_dis = mapply(prev.month.discharge, startDate, MoreArgs = list(unitDischarge,900)))
+
+# write data to csv
+write_csv(eventsRawUnique2, "data/eventsRaw.csv")
+```
+
+```{r}
+eventsRawUnique2 <- read_csv("data/eventsRaw.csv")
+
+```
+
+Finally, we reshape the data so that there are 4 rows for each event (one for each constituent). This makes plotting easier, so that each constituent doesn't have to be plotted separately. We also add columns for the direction of hysteresis (clockwise or counterclockwise) and slope (flushing or dilution). In Aguilera and Melack (2018), they classify clockwise hysteresis as HI >= 0.05, counterclockwise hysteresis as HI <= -0.05, flushing as $\Delta C$ >= 0.1, and dilution as $\Delta C$ <= 0.1. For now, I'm going to use 0.05 as the limit for flushing and dilution.
+
+```{r reshaping the data}
+eventsRawReshaped <- eventsRawUnique2 %>% 
+  gather(key, value, -c(startDate, endDate, length, length_loop,
+                        dis_change, dis_change_loop, max_dis, avg_temp, 
+                        precip, precipYear, prev_month_dis, cv_q)) %>% 
+  separate(key, c("measure", "var"), "_") %>% 
+  tidyr::spread(measure, value)
+
+# add columns for directions of hysteresis, slope, and complexity
+eventsRawFinal <- eventsRawReshaped %>% 
+  mutate(H_dir = case_when(HI >= 0.05 ~ "clockwise",
+                           HI <= -0.05 ~ "counter-clockwise", T ~ "none"),
+         slope_dir = case_when(Slope >= 0.05 ~ "flushing",
+                               Slope <= -0.05 ~ "dilution", T ~ "constant"),
+         complex = case_when(area >= abs(2*HI) ~ "complex",
+                             T ~ "not complex"))
+# one event (starting 9/9/15) had a value >1 for fdom slope because of negative
+# values at the beginning-- might be best to take out the whole fdom row for
+# this event because the data jumps from negatives to 100 (the issue we've been 
+# looking at for the time series)
+eventsRawFinal2 <- eventsRawFinal[-c(70,87,88),]
+
+```
+
+# Data exploration and visualization
+
+Now that we have a dataframe of all the events, we can visualize the data in various ways.
+
+## Event summary
+Making hydrograph figures:
+```{r hydrographs}
+check_during_event <- function(date){
+  for (i in 1:18){
+    if(date >= date(eventsTurb$startDate[i]) &
+       date <= date(eventsTurb$endDate[i])) {
+      return(T)
+       }
+  }
+  return(F)
+}
+
+WQ_hourly_discharge_startDates <- WQ_hourly_discharge %>% 
+  mutate (startDate = date(dateTime) %in% date(eventsFinal2$startDate),
+          during_event = sapply(date,check_during_event))
+
+just_starts <- WQ_hourly_discharge_startDates %>% 
+  filter(startDate, site == "MC", hour %in% c(0,1))
+
+just_events <- WQ_hourly_discharge_startDates %>% filter(during_event) %>% 
+  mutate(hourlyDischarge = case_when(date %in% just_starts$date ~ -1,
+                                     TRUE ~ hourlyDischarge))
+
+just_events$hourlyDischarge <- replace(just_events$hourlyDischarge, 
+                                       which(just_events$hourlyDischarge < 0), NA)
+
+png(filename = "hydrographs.png", width = 6, height = 4, 
+    units = "in", res = 300, bg = "transparent")
+WQ_hourly_discharge_startDates %>% filter(month(date) %in% c(4, 5, 6, 7, 8, 9, 10)) %>% 
+  ggplot(aes(x = date, y = hourlyDischarge)) +
+  geom_line(col = "black") +
+  geom_line(data = just_events, aes(x = date, y = hourlyDischarge), col = "red") +
+  xlab("Time") + ylab(expression(paste("Discharge (m"^{3} ,"s"^{-1}, ")"))) +
+  geom_point(data = just_starts, 
+             aes(x = date, y = hourlyDischarge),
+             col = "blue", cex = 1) +
+  geom_vline(xintercept = mdy("06-02-2015"), lty = 2) +
+  geom_vline(xintercept = mdy("10-21-2015"), lty = 2) +
+  geom_vline(xintercept = mdy("04-13-2016"), lty = 2) +
+  geom_vline(xintercept = mdy("10-31-2016"), lty = 2) +
+  geom_vline(xintercept = mdy("06-09-2017"), lty = 2) +
+  geom_vline(xintercept = mdy("10-26-2017"), lty = 2) +
+  geom_vline(xintercept = mdy("05-08-2018"), lty = 2) +
+  geom_vline(xintercept = mdy("10-12-2018"), lty = 2) +
+  facet_wrap(vars(as.factor(year(date))), scales = "free_x") +
+  theme_bw() +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA),
+        legend.background = element_rect(fill = "transparent"), legend.position = "bottom") 
+dev.off()
+
+
+
+```
+
+First, we can summarize the event metrics. Here is a heatmap showing when the events occurred over time (some data wrangling is required first to get a full dataframe of event counts):
+```{r}
+# use subset with just turbidity so events aren't repeated
+eventsTurb <- eventsFinal2 %>% filter(var == "turb")
+
+# discrete month column
+eventsTurb2 <- eventsTurb %>% 
+  mutate(month = case_when(month(startDate) == 4 ~ "April",
+                           month(startDate) == 6 ~ "June",
+                           month(startDate) == 7 ~ "July",
+                           month(startDate) == 8 ~ "August",
+                           month(startDate) == 9 ~ "September"))
+eventsTurb2$month <- factor(eventsTurb2$month,
+                            levels = c("April", "June", "July", "August", "September"))
+
+# get number of events starting in each month of each year
+eventsCount <- (eventsTurb2 %>% 
+  mutate(year = as.factor(year(startDate))))[,c(1, 19, 20)] %>% 
+  group_by(year, month) %>% tally() 
+
+# make a dataframe of all possible combinations of month and year
+allMonthYear <- eventsCount %>% expand(month, year) 
+allMonthYear <- allMonthYear %>% as_tibble() %>% 
+  add_row(month = "May", year = as.factor(2015)) %>% 
+   add_row(month = "May", year = as.factor(2016)) %>% 
+   add_row(month = "May", year = as.factor(2017)) %>% 
+   add_row(month = "May", year = as.factor(2018))
+
+# make full events count dataframe
+eventsCount2 <- full_join(eventsCount, allMonthYear) %>% 
+  mutate(n = case_when(!is.na(n) ~ as.character(n),
+                       T ~ "0"))
+eventsCount2$month <- factor(eventsCount2$month,
+                            levels = c("April", "May", "June", "July", "August", "September"))
+
+# figure: heatmap
+#png(filename = "monthly_event_count_grid.png", width = 6, height = 5.5,
+    #units = "in", res = 300, bg = "transparent")
+eventsCount2 %>% 
+  ggplot(aes(x = year, y = month, fill = n)) +
+  geom_tile(color = "black") +
+  scale_fill_manual(values = c("white", brewer.pal(3, "Paired")[1], brewer.pal(3, "Paired")[2]),
+                    name = "Number of Events") +
+  theme_bw() + xlab("Year") + ylab("Month") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA),
+        legend.background = element_rect(fill = "transparent"), legend.position = "bottom") 
+#dev.off()  
+```
+
+We can also make histograms to see the distributions of the event metrics:
+```{r}
+#png(filename = "event_hists.png", width = 5, height = 5,
+    #units = "in", res = 300, bg = "transparent")
+par(mfrow = c(3,3), bg = "transparent", mgp=c(2.5,1,0), mar = c(5,2,1,2))
+hist(eventsTurb$avg_temp, breaks = c(14, 17, 20, 23, 26, 29),
+     xlab = "Average temperature (C)", xlim = c(10, 30),
+     ylab = "Number of events", main = "")
+hist(eventsTurb$length, breaks = 5,
+     xlab = "Length (days)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$dis_change, breaks = c(0, 16000, 32000, 48000, 64000, 80000),
+     xlab = "Change in discharge (ft^3/s)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$max_dis, breaks = 5,
+     xlab = "Peak discharge (ft^3/s)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$precip, breaks = 5,
+     xlab = "Cumulative precipitation (in)", 
+     ylab = "Number of events", main = "")
+hist(eventsTurb$precipYear, breaks = 5,
+     xlab = "Precipitation since Jan 1 (in)", 
+     ylab = "Number of events", main = "")
+plot.new()
+hist(eventsTurb$prev_month_dis, breaks = 5,
+     xlab = "Previous month discharge", 
+     ylab = "Number of events", main = "")
+#dev.off()
+```
+
+## HI/slope summary
+Next, we can look at the distributions of hysteresis and slope between constituents and events. 
+
+First, we can make scatterplots with hysteresis index along the x-axis and slope along the y-axis. We can plot the data in this way both event-wise (a plot for each event with a dot for each constituent), or constituent-wise (a plot for each constituent with a dot for each event). 
+
+```{r HI/slope scatterplots}
+# New facet label names for constituents
+var.labs <- c("Cyanobacteria", "Chlorophyll", "FDOM", "Nitrate", "Turbidity")
+names(var.labs) <- c("bga", "chl", "fdom", "n03", "turb")
+
+# event-wise plots
+eventsFinal2 %>% 
+  ggplot(aes(x = HI, y = Slope, col = var)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  geom_vline(xintercept=0, linetype="dashed", color = "black") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~as.factor(startDate)) +
+  scale_color_brewer(palette = "Dark2", name = "Constituent", labels = var.labs) 
+
+# constituent-wise plots
+png(filename = "HI_slope_constV2.png", 
+    width = 4, height = 5, units = "in", res = 300, bg = "transparent")
+eventsV2Final2 %>% 
+  ggplot(aes(x = HI, y = Slope)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 3) +
+  theme_bw() + xlab("Hysteresis Index") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+```
+
+Next, we can visualize the categorical HI and slope data by making barplots
+```{r HI/slope barplots}
+# need to reorder the slope directions
+eventsFinal2$slope_dir <- factor(eventsFinal2$slope_dir, 
+                                 levels = c("flushing", "dilution", "constant"))
+eventsV2Final2$slope_dir <- factor(eventsV2Final2$slope_dir, 
+                                 levels = c("flushing", "dilution", "constant"))
+
+
+# dealing with complex hysteresis status
+events_hyst_type <- eventsFinal2 %>% 
+  mutate(hyst_type = case_when(complex == "complex" ~ "complex",
+                               H_dir == "clockwise" ~ "clockwise",
+                               H_dir == "counter-clockwise" ~ "counter-clockwise",
+                               T ~ "no hysteresis"))
+events_hyst_type$hyst_type <- factor(events_hyst_type$hyst_type, 
+                                     levels = c("clockwise", "counter-clockwise", 
+                                                "complex", "no hysteresis"))
+# bar plot of hysteresis type
+hiBar <- events_hyst_type %>% 
+  ggplot(aes(x = var, fill = hyst_type)) +
+  geom_bar(position = position_dodge(preserve = "single")) +
+  scale_fill_brewer(palette = "Paired", name = "Hysteresis Type") +
+  ylab("Number of Events") + xlab("Constituent") +
+  scale_x_discrete(labels = var.labs) +
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12)) +
+  theme_bw() + 
+  theme(plot.background = element_rect(fill = "transparent", colour = NA),
+        legend.background = element_rect(fill = "transparent")) 
+
+# bar plot of slope type
+slopeBar <- eventsFinal2 %>% 
+  ggplot(aes(x = var, fill = slope_dir)) +
+  geom_bar(position = "dodge") +
+  scale_fill_brewer(palette = "Paired", name = "Slope Type") +
+  ylab("Number of Events") + xlab("Constituent") +
+  scale_x_discrete(labels = var.labs) +
+  scale_y_continuous(breaks = c(2, 4, 6, 8, 10, 12)) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent")) 
+
+# figure with both bar plots
+#png(filename = "HI_slope_bar.png", 
+    #width = 6, height = 6, units = "in", res = 300, bg = "transparent")
+ggarrange(hiBar, slopeBar, nrow = 2)
+#dev.off()
+```
+
+## Pairwise constituent comparisons
+```{r}
+
+```
+
+
+# Relationships between event metrics and constituent responses
+
+To explore the relationships between event metrics and HI/slope responses for each constituent, we can create multiple linear regressions using the event metrics as predictor variables and HI and slope as response variables. Here are functions to do this:
+```{r}
+# multiple linear regression function for HI
+reg_multi_HI <- function(variable){
+  subset <- eventsFinal2 %>% 
+    filter(var == variable)
+  
+  return((lm(subset$HI ~ 
+             subset$dis_change + subset$length + subset$max_dis + subset$prev_month_dis +
+             subset$avg_temp + subset$precip + subset$precipYear )))
+}
+
+# multiple linear regression function for slope
+reg_multi_slope <- function(variable){
+  subset <- eventsFinal2 %>% 
+    filter(var == variable)
+  
+  return((lm(subset$Slope ~ 
+             subset$dis_change + subset$length + subset$max_dis + subset$prev_month_dis +
+             subset$avg_temp + subset$precip + subset$precipYear )))
+}
+```
+
+To determine the best combination of predictor variables to model HI and slope for each constituent, we can conduct step AIC analyses:
+```{r step AIC}
+# ================ Turbidity ================
+step(reg_multi_HI("turb"))
+summary(lm(eventsTurb$HI ~ eventsTurb$length + eventsTurb$max_dis + 
+             eventsTurb$precipYear + eventsTurb$precip))
+step(reg_multi_slope("turb"))
+summary(lm(eventsTurb$Slope ~ eventsTurb$prev_month_dis + 
+             eventsTurb$avg_temp + eventsTurb$precip))
+
+# ================ Nitrate =================
+step(reg_multi_HI("n03"))
+summary(lm(eventsN03$HI ~ eventsN03$avg_temp))
+step(reg_multi_slope("n03"))
+summary(lm(eventsN03$Slope ~ eventsN03$dis_change + eventsN03$precip +
+             eventsN03$length + eventsN03$prev_month_dis))
+
+# ================ FDOM =================
+step(reg_multi_HI("fdom"))
+summary(lm(eventsFDOM$HI ~ eventsFDOM$length))
+step(reg_multi_slope("fdom"))
+summary(lm(eventsFDOM$Slope ~ eventsFDOM$length))
+
+
+# ================ Chlorophyll ==================
+step(reg_multi_HI("chl"))
+summary(lm(eventsChl$HI ~ 1))
+step(reg_multi_slope("chl"))
+summary(lm(eventsChl$Slope ~ 1))
+
+# ================ BGA =================
+step(reg_multi_HI("bga"))
+summary(lm(eventsBGA$HI ~ 1))
+step(reg_multi_slope("bga"))
+summary(lm(eventsBGA$Slope ~ eventsBGA$prev_month_dis))
+```
+
+For the linear models that only include one predictor variable, we can plot the linear model:
+```{r linear model plots}
+#png(filename = "nO3_HI_temp.png", width = 4, height = 3,
+   # units = "in", res = 300, bg = "transparent")
+eventsN03 %>% ggplot(aes(x = avg_temp, y = HI)) + 
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  xlab("Average Temperature") + ylab("Hysteresis Index") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+#dev.off()
+
+#png(filename = "fdom_HI_length.png", width = 4, height = 3,
+    #units = "in", res = 300, bg = "transparent")
+eventsFDOM %>% ggplot(aes(x = length, y = HI)) + 
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  xlab("Event length (days)") + ylab("Hysteresis Index") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+#dev.off()
+
+#png(filename = "fdom_S_length.png", width = 4, height = 3,
+    #units = "in", res = 300, bg = "transparent")
+eventsFDOM %>% ggplot(aes(x = length, y = Slope)) + 
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  geom_point() + geom_smooth(method = "lm", se = F) +
+  xlab("Event length (days)") + ylab("Slope") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+#dev.off()
+```
+
+```{r checking temp vs seasonality}
+# plot of startdate vs temp
+events_mergeRaw %>% 
+  ggplot(aes(x = yday(startDate), y = avg_temp, col = site)) +
+  geom_point() +
+  xlab("Start date (day of year)") +
+  ylab("Average water temperature during event")
+
+# plot of days between startdate and summer solstice vs temp
+events_mergeRaw %>% 
+  ggplot(aes(x = abs(yday(startDate)-172), y = avg_temp, col = site)) + 
+  geom_point() +
+  xlab("Number of days between start date and summer solstice") +
+  ylab("Average water temperature during event")
+
+# linear regression between temp and days from summer solstice
+summary(lm(events_mergeRaw$avg_temp ~ abs(yday(events_mergeRaw$startDate)-172)))
+
+```
+```{r regression plots MC}
+eventsRawFinal2 %>% 
+  filter(var == "fdom") %>% 
+  ggplot(aes(x = length, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  geom_hline(yintercept = 0, lty = 2) +
+  xlab("Event duration (days)") + ylab("HI") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+
+eventsRawFinal2 %>% 
+  filter(var == "turb") %>% 
+  ggplot(aes(x = dis_change, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  geom_hline(yintercept = 0, lty = 2) +
+  xlab("Event duration (days)") + ylab("HI") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+
+eventsRawFinal2 %>% 
+  filter(var == "turb") %>% 
+  ggplot(aes(x = avg_temp, y = Slope)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  geom_hline(yintercept = 0, lty = 2) +
+  xlab("Average temperature (C)") + ylab("Slope") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+
+eventsRawFinal2 %>% 
+  filter(var == "n03") %>% 
+  ggplot(aes(x = avg_temp, y = HI)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  geom_hline(yintercept = 0, lty = 2) +
+  xlab("Average temperature (C)") + ylab("HI") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
+  
+```
+

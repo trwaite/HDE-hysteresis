@@ -13,7 +13,7 @@ library(lubridate)
 source("C_Q_plotting_functions.R")
 source("event_functions.R")
 source("C_Q_plotting_functions.R")
-WQ_hourly_discharge <- read_csv("data/WQ_hourly_discharge.csv")
+#WQ_hourly_discharge <- read_csv("data/WQ_hourly_discharge.csv")
 ```
 
 ```{r function for adding events}
@@ -161,22 +161,285 @@ events_SI_Final2 <- events_SI_Final %>%
 
 ```
 
+
+# Version 2
+```{r function for adding events}
+# adds a high-discharge event to the events tibble,
+# given the data, start date, end date, and number of
+# observations per day
+add.event.SI.V2 <- function(data, Site, start, end, freq){
+  # subset the data to include just the event
+  subset <- data %>% 
+    filter(dateTime >= ymd_hm(start) & dateTime <= ymd_hm(end)) %>% 
+    filter(site == Site)
+  # add rising or falling limb column
+  peakDate <- (subset %>% slice_max(hourlyDischarge))[["dateTime"]]
+  # RL if before peakDate, FL if after, peak if on peakDate
+  subset <- subset %>% 
+    mutate(limb = case_when(dateTime < peakDate ~ "RL",
+                            dateTime > peakDate ~ "FL",
+                            T ~ "peak"))
+  turb <- storm_cq_v2(data, Site, start, end, "Turb", 20, freq)
+  n03 <- storm_cq_v2(data, Site, start, end, "NO3_mgL", 20, freq)
+  chl <- storm_cq_v2(data, Site, start, end, "CHLugL", 20, freq)
+  fdom <- storm_cq_v2(data, Site, start, end, "FDOMqsu", 20, freq)
+  bga <- storm_cq_v2(data, Site, start, end, "BGAugL", 20, freq)
+  return(events_SI_V2 %>% add_row(startDate = ymd_hm(start), endDate = ymd_hm(end),
+                     length = as.numeric(ymd_hm(end) - ymd_hm(start)), 
+                     length_loop = storm.length.loop(subset),
+                     dis_change = storm.dis.change(subset),
+                     dis_change_loop = storm.dis.change.loop(subset),
+                     max_dis = storm.max.dis(subset),
+                     avg_temp = storm.avg.temp(subset),
+                     HI_turb = turb[[2]], Slope_turb = turb[[4]], area_turb = turb[[3]],
+                     HI_n03 = n03[[2]], Slope_n03 = n03[[4]], area_n03 = n03[[3]],
+                     HI_chl = chl[[2]], Slope_chl = chl[[4]], area_chl = chl[[3]],
+                     HI_fdom = fdom[[2]], Slope_fdom = fdom[[4]], area_fdom = fdom[[3]],
+                     HI_bga = bga[[2]], Slope_bga = bga[[4]], area_bga = bga[[3]],
+                     cv_q = turb[[5]][1], cv_turb = turb[[5]][2], cv_n03 = n03[[5]][2],
+                     cv_fdom = fdom[[5]][2], cv_chl = chl[[5]][2], cv_bga = bga[[5]][2]))
+}
+```
+
+
+
+```{r adding events}
+# initialize the tibble
+events_SI_V2 <- tibble(startDate = Date(), endDate = Date(), 
+                 length = numeric(), length_loop = numeric(),
+                 dis_change = numeric(), dis_change_loop = numeric(),
+                 max_dis = numeric(), avg_temp = numeric(),
+                 HI_turb = numeric(), Slope_turb = numeric(), area_turb = numeric(),
+                 HI_n03 = numeric(), Slope_n03 = numeric(), area_n03 = numeric(),
+                 HI_chl = numeric(), Slope_chl = numeric(), area_chl = numeric(),
+                 HI_fdom = numeric(), Slope_fdom = numeric(), area_fdom = numeric(),
+                 HI_bga = numeric(), Slope_bga = numeric(), area_bga = numeric(),
+                 cv_q = numeric(), cv_turb = numeric(), cv_n03 = numeric(),
+                 cv_fdom = numeric(), cv_chl = numeric(), cv_bga = numeric())
+
+# add events -- this takes a long time to run 
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2016-04-25-00-00", "2016-05-24-23-59", 12)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2016-07-13-00-00", "2016-08-10-23-59", 12)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2016-06-01-00-00", "2016-06-14-23-59", 12)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2016-08-10-00-00", "2016-09-05-23-59", 12)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2016-09-06-00-00", "2016-09-20-23-59", 12)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2015-07-06-00-00", "2015-07-28-23-59", 24)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2017-06-14-00-00", "2017-06-28-23-59", 12)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2015-09-17-00-00", "2015-09-24-23-59", 24)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2015-09-09-00-00", "2015-09-17-23-59", 24)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2018-09-03-00-00", "2018-09-15-23-59", 12)
+events_SI_V2 <- add.event.SI.V2(WQ_hourly_discharge, "SI", "2015-08-18-00-00", "2015-09-04-23-59", 24)
+ 
+# events with missing data
+# missing 45 rows
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-09-20-00-00", "2016-10-15-23-59", 12)
+# missing 80 rows (7/22 - end)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-19-00-00", "2017-07-25-23-59", 24)
+# missing all data
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-26-00-00", "2017-07-30-23-59", 24)
+# missing all data
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-06-00-00", "2017-08-13-23-59", 24)
+# missing most data (all except first 32 rows)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-09-20-00-00", "2017-09-24-23-59", 24)
+# missing 129 rows
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2018-06-15-00-00", "2018-07-31-23-59", 12)
+# missing 227 rows (beginning until 8/25)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-16-00-00", "2017-09-17-23-59", 24)
+
+# get rid of duplicate rows
+events_SI_V2_unique <- unique(events_SI_V2)
+
+```
+
+```{r reshaping the data}
+events_SI_V2_Reshaped <- events_SI_V2_unique %>% 
+  gather(key, value, -c(startDate, endDate, length, length_loop,
+                        dis_change, dis_change_loop, max_dis, avg_temp, cv_q)) %>% 
+  separate(key, c("measure", "var"), "_") %>% 
+  tidyr :: spread(measure, value)
+
+# add columns for directions of hysteresis and slope
+events_SI_V2_Final <- events_SI_V2_Reshaped %>% 
+  mutate(H_dir = case_when(HI >= 0.05 ~ "clockwise",
+                           HI <= -0.05 ~ "counter-clockwise", T ~ "none"),
+         slope_dir = case_when(Slope >= 0.05 ~ "flushing",
+                               Slope <= -0.05 ~ "dilution", T ~ "constant"),
+         complex = case_when(area >= abs(2*HI) ~ "complex",
+                             T ~ "not complex"))
+
+write_csv(events_SI_V2_Final, "data/events_SI_V2")
+
+# add other metrics
+events_SI_V2_Final2 <- events_SI_V2_Final %>% 
+  mutate(precip = mapply(totalPrecip, startDate, date(endDate), MoreArgs = list(precip2)),
+         precipYear = mapply(yearTotalPrecip, startDate, MoreArgs = list(precip2)),
+         prev_month_dis = mapply(prev.month.discharge, startDate, MoreArgs = list(unitDischarge,900)))
+
+```
+
+
+# raw data version
+
+```{r function for adding events}
+# adds a high-discharge event to the events tibble,
+# given the data, start date, end date, and number of
+# observations per day
+add.event.SI.raw <- function(data, Site, start, end, freq){
+  # subset the data to include just the event
+  subset <- data %>% 
+    filter(dateTime >= ymd_hm(start) & dateTime <= ymd_hm(end)) %>% 
+    filter(site == Site)
+  # add rising or falling limb column
+  peakDate <- (subset %>% slice_max(hourlyDischarge))[["dateTime"]]
+  # RL if before peakDate, FL if after, peak if on peakDate
+  subset <- subset %>% 
+    mutate(limb = case_when(dateTime < peakDate ~ "RL",
+                            dateTime > peakDate ~ "FL",
+                            T ~ "peak"))
+  turb <- storm_cq_v2_raw(data, Site, start, end, "Turb", 20, freq)
+  n03 <- storm_cq_v2_raw(data, Site, start, end, "NO3_mgL", 20, freq)
+  chl <- storm_cq_v2_raw(data, Site, start, end, "CHLugL", 20, freq)
+  fdom <- storm_cq_v2_raw(data, Site, start, end, "FDOMqsu", 20, freq)
+  bga <- storm_cq_v2_raw(data, Site, start, end, "BGAugL", 20, freq)
+  return(events_SI_raw %>% add_row(startDate = ymd_hm(start), endDate = ymd_hm(end),
+                     length = as.numeric(ymd_hm(end) - ymd_hm(start)), 
+                     length_loop = storm.length.loop(subset),
+                     dis_change = storm.dis.change(subset),
+                     dis_change_loop = storm.dis.change.loop(subset),
+                     max_dis = storm.max.dis(subset),
+                     avg_temp = storm.avg.temp(subset),
+                     HI_turb = turb[[2]], Slope_turb = turb[[4]], area_turb = turb[[3]],
+                     HI_n03 = n03[[2]], Slope_n03 = n03[[4]], area_n03 = n03[[3]],
+                     HI_chl = chl[[2]], Slope_chl = chl[[4]], area_chl = chl[[3]],
+                     HI_fdom = fdom[[2]], Slope_fdom = fdom[[4]], area_fdom = fdom[[3]],
+                     HI_bga = bga[[2]], Slope_bga = bga[[4]], area_bga = bga[[3]],
+                     cv_q = turb[[5]][1], cv_turb = turb[[5]][2], cv_n03 = n03[[5]][2],
+                     cv_fdom = fdom[[5]][2], cv_chl = chl[[5]][2], cv_bga = bga[[5]][2]))
+}
+```
+
+
+
+```{r adding events}
+# initialize the tibble
+events_SI_raw <- tibble(startDate = Date(), endDate = Date(), 
+                 length = numeric(), length_loop = numeric(),
+                 dis_change = numeric(), dis_change_loop = numeric(),
+                 max_dis = numeric(), avg_temp = numeric(),
+                 HI_turb = numeric(), Slope_turb = numeric(), area_turb = numeric(),
+                 HI_n03 = numeric(), Slope_n03 = numeric(), area_n03 = numeric(),
+                 HI_chl = numeric(), Slope_chl = numeric(), area_chl = numeric(),
+                 HI_fdom = numeric(), Slope_fdom = numeric(), area_fdom = numeric(),
+                 HI_bga = numeric(), Slope_bga = numeric(), area_bga = numeric(),
+                 cv_q = numeric(), cv_turb = numeric(), cv_n03 = numeric(),
+                 cv_fdom = numeric(), cv_chl = numeric(), cv_bga = numeric())
+
+# add events -- this takes a long time to run 
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2016-04-25-00-00", "2016-05-24-23-59", 12)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2016-07-13-00-00", "2016-08-10-23-59", 12)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2016-06-01-00-00", "2016-06-14-23-59", 12)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2016-08-10-00-00", "2016-09-05-23-59", 12)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2016-09-06-00-00", "2016-09-20-23-59", 12)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2015-07-06-00-00", "2015-07-28-23-59", 24)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2017-06-14-00-00", "2017-06-28-23-59", 12)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2015-09-17-00-00", "2015-09-24-23-59", 24)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2015-09-09-00-00", "2015-09-17-23-59", 24)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2018-09-03-00-00", "2018-09-15-23-59", 12)
+events_SI_raw <- add.event.SI.raw(WQ_hourly_discharge, "SI", "2015-08-18-00-00", "2015-09-04-23-59", 24)
+ 
+# events with missing data
+# missing 45 rows
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2016-09-20-00-00", "2016-10-15-23-59", 12)
+# missing 80 rows (7/22 - end)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-19-00-00", "2017-07-25-23-59", 24)
+# missing all data
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-07-26-00-00", "2017-07-30-23-59", 24)
+# missing all data
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-06-00-00", "2017-08-13-23-59", 24)
+# missing most data (all except first 32 rows)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-09-20-00-00", "2017-09-24-23-59", 24)
+# missing 129 rows
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2018-06-15-00-00", "2018-07-31-23-59", 12)
+# missing 227 rows (beginning until 8/25)
+#events_SI <- add.event.SI(WQ_hourly_discharge, "SI", "2017-08-16-00-00", "2017-09-17-23-59", 24)
+
+# get rid of duplicate rows
+events_SI_raw_unique <- unique(events_SI_raw)
+
+```
+
+```{r reshaping the data}
+events_SI_raw_Reshaped <- events_SI_raw_unique %>% 
+  gather(key, value, -c(startDate, endDate, length, length_loop,
+                        dis_change, dis_change_loop, max_dis, avg_temp, cv_q)) %>% 
+  separate(key, c("measure", "var"), "_") %>% 
+  tidyr :: spread(measure, value)
+
+# add columns for directions of hysteresis and slope
+events_SI_raw_Final <- events_SI_raw_Reshaped %>% 
+  mutate(H_dir = case_when(HI >= 0.05 ~ "clockwise",
+                           HI <= -0.05 ~ "counter-clockwise", T ~ "none"),
+         slope_dir = case_when(Slope >= 0.05 ~ "flushing",
+                               Slope <= -0.05 ~ "dilution", T ~ "constant"),
+         complex = case_when(area >= abs(2*HI) ~ "complex",
+                             T ~ "not complex"))
+
+#write_csv(events_SI_raw_Final, "data/events_SI_raw")
+#events_SI_raw_Final <- read.csv("data/events_SI_raw")
+events_SI_raw_Final <- events_SI_raw_Final %>% 
+  mutate(startDate = ymd_hms(startDate), endDate = ymd_hms(endDate))
+
+
+# add other metrics
+events_SI_raw_Final2 <- events_SI_raw_Final %>% 
+  mutate(precip = mapply(totalPrecip, startDate, date(endDate), MoreArgs = list(precip2)),
+         precipYear = mapply(yearTotalPrecip, startDate, MoreArgs = list(precip2)),
+         prev_month_dis = mapply(prev.month.discharge, startDate, MoreArgs = list(unitDischarge,900)))
+
+
+```
+
+
 ```{r plotting HI and slope}
 # New facet label names for constituents
 var.labs <- c("Cyanobacteria", "Chlorophyll", "FDOM", "Nitrate", "Turbidity")
 names(var.labs) <- c("bga", "chl", "fdom", "n03", "turb")
 
-#png(filename = "HI_slope_SI.png", 
-    #width = 9, height = 6, units = "in", res = 300, bg = "transparent")
+png(filename = "HI_slope_SI.png", 
+    width = 4, height = 5, units = "in", res = 300, bg = "transparent")
 events_SI_Final %>% 
   ggplot(aes(x = HI, y = Slope)) +
   geom_hline(yintercept=0, linetype="dashed", color = "red") +
   geom_vline(xintercept=0, linetype="dashed", color = "red") +
   geom_point() + xlim(-1, 1) + ylim(-1, 1) +
-  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 2) +
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 3) +
   theme_bw() + xlab("Hysteresis Index") +
   theme(plot.background = element_rect(fill = "transparent",colour = NA))
-#dev.off()
+dev.off()
+
+png(filename = "HI_slope_SI_v2.png", 
+    width = 4, height = 5, units = "in", res = 300, bg = "transparent")
+events_SI_V2_Final %>% 
+  ggplot(aes(x = HI, y = Slope)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 3) +
+  theme_bw() + xlab("Hysteresis Index") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+
+png(filename = "HI_slope_SI_raw.png", 
+    width = 4, height = 5, units = "in", res = 300, bg = "transparent")
+events_SI_raw_Final %>% 
+  ggplot(aes(x = HI, y = Slope)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 3) +
+  theme_bw() + xlab("Hysteresis Index") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
 ```
 
 ```{r barplots of HI and slope}
@@ -223,15 +486,67 @@ ggarrange(hiBarSI, slopeBarSI, nrow = 2)
 dev.off()
 ```
 
+```{r classification without none or constant}
+events_SI_raw_Final3 <- events_SI_raw_Final2 %>% 
+  mutate(H_dir2 = case_when(HI > 0 ~ "Clockwise",
+                            T ~ "Counter-clockwise"),
+         slope_dir2 = case_when(Slope > 0 ~ "Flushing",
+                                T ~ "Dilution"))
+
+events_MC_raw_Final3 <- events_MC_raw_Final2 %>% 
+  mutate(H_dir2 = case_when(HI > 0 ~ "Clockwise",
+                            T ~ "Counter-clockwise"),
+         slope_dir2 = case_when(Slope > 0 ~ "Flushing",
+                                T ~ "Dilution"))
+
+events_SI_raw_Final3 %>% 
+  ggplot(aes(x = var, y = (..count..)/11, fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir2), rows = vars(slope_dir2), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom") +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events")+
+  ylim(c(0,0.75))
+```
+
+
+# site comparison
 
 ```{r comparison of MC and SI}
 # merge MC and SI events dataframes
-eventsMC_merge <- eventsFinal2[,-c(9, 10, 11)] %>% 
+eventsMC_merge <- eventsFinal2 %>% 
   mutate(site = "MC")
-eventsSI_merge <- events_SI_Final %>% 
+eventsSI_merge <- events_SI_Final2 %>% 
   mutate(site = "SI")
 
 events_merge <- rbind(eventsMC_merge, eventsSI_merge)
+
+# merge MC and SI events dataframes v2
+eventsMC_mergeV2 <- eventsV2Final2 %>% 
+  mutate(site = "MC")
+eventsSI_mergeV2 <- events_SI_V2_Final2 %>% 
+  mutate(site = "SI")
+
+events_mergeV2 <- rbind(eventsMC_mergeV2, eventsSI_mergeV2)
+
+# merge MC and SI events dataframes raw data
+eventsMC_mergeRaw <- eventsRawFinal2 %>% 
+  mutate(site = "MC")
+eventsSI_mergeRaw <- events_SI_raw_Final2 %>% 
+  mutate(site = "SI")
+
+events_mergeRaw <- rbind(eventsMC_mergeRaw, eventsSI_mergeRaw)
+
+# merge MC and SI events dataframes raw data without none/constant
+eventsMC_mergeRawAbs <- eventsRawFinal3 %>% 
+  mutate(site = "MC")
+eventsSI_mergeRawAbs <- events_SI_raw_Final3 %>% 
+  mutate(site = "SI")
+
+events_mergeRawAbs <- rbind(eventsMC_mergeRawAbs, eventsSI_mergeRawAbs)
 
 #===== distance between MC and SI in HI-slope space =====
 dist_MC_SI_temp <-events_merge %>% 
@@ -244,7 +559,56 @@ dist_MC_SI_temp2 <- dist_MC_SI_temp[complete.cases(dist_MC_SI_temp),]
 dist_MC_SI_temp3 <- dist_MC_SI_temp2[-c(4,51),]
 
 dist_MC_SI <- dist_MC_SI_temp3 %>% 
-  mutate(dist = sqrt((as.numeric(MC_HI) - as.numeric(SI_HI))^2 + (as.numeric(MC_Slope) - as.numeric(SI_Slope))^2), length = as.numeric(MC_length)) 
+  mutate(dist = sqrt((as.numeric(MC_HI) - as.numeric(SI_HI))^2 + (as.numeric(MC_Slope) - as.numeric(SI_Slope))^2), length = as.numeric(MC_length),
+         dist_HI = as.numeric(MC_HI) - as.numeric(SI_HI),
+         dist_Slope = as.numeric(MC_Slope) - as.numeric(SI_Slope)) 
+
+# add columns for whether MC was higher than SI for slope and HI
+dist_MC_SI <- dist_MC_SI %>% 
+  mutate(HI_higher = case_when(dist_HI > 0 ~ "MC", T ~ "SI"),
+         Slope_higher = case_when(dist_Slope > 0 ~ "MC", T ~ "SI"))
+
+#===== distance between MC and SI in HI-slope space V2 =====
+dist_MC_SI_tempV2 <-events_mergeV2 %>% 
+  gather(variable, value, -c(startDate, var, site)) %>%
+  unite(temp, site, variable) %>%
+  spread(temp, value) %>% 
+  drop_na() 
+
+dist_MC_SI_temp2V2 <- dist_MC_SI_tempV2[complete.cases(dist_MC_SI_tempV2),] 
+dist_MC_SI_temp3V2 <- dist_MC_SI_temp2V2[-c(4,51),]
+
+dist_MC_SI_V2 <- dist_MC_SI_temp3V2 %>% 
+  mutate(dist = sqrt((as.numeric(MC_HI) - as.numeric(SI_HI))^2 + (as.numeric(MC_Slope) - as.numeric(SI_Slope))^2), length = as.numeric(MC_length),
+         dist_HI = as.numeric(MC_HI) - as.numeric(SI_HI),
+         dist_Slope = as.numeric(MC_Slope) - as.numeric(SI_Slope)) 
+
+# add columns for whether MC was higher than SI for slope and HI
+dist_MC_SI_V2 <- dist_MC_SI_V2 %>% 
+  mutate(HI_higher = case_when(dist_HI > 0 ~ "MC", T ~ "SI"),
+         Slope_higher = case_when(dist_Slope > 0 ~ "MC", T ~ "SI"))
+
+#===== distance between MC and SI in HI-slope space raw data =====
+dist_MC_SI_tempRaw <-events_mergeRaw %>% 
+  gather(variable, value, -c(startDate, var, site)) %>%
+  unite(temp, site, variable) %>%
+  spread(temp, value) %>% 
+  drop_na() 
+
+dist_MC_SI_temp2Raw <- dist_MC_SI_tempRaw[complete.cases(dist_MC_SI_tempRaw),] 
+dist_MC_SI_temp3Raw <- dist_MC_SI_temp2Raw[-c(4,51),]
+
+dist_MC_SI_Raw <- dist_MC_SI_temp3Raw %>% 
+  mutate(dist = sqrt((as.numeric(MC_HI) - as.numeric(SI_HI))^2 + (as.numeric(MC_Slope) - as.numeric(SI_Slope))^2), length = as.numeric(MC_length),
+         dist_HI = as.numeric(MC_HI) - as.numeric(SI_HI),
+         dist_Slope = as.numeric(MC_Slope) - as.numeric(SI_Slope)) 
+
+# add columns for whether MC was higher than SI for slope and HI
+dist_MC_SI_Raw <- dist_MC_SI_Raw %>% 
+  mutate(HI_higher = case_when(dist_HI > 0 ~ "MC", T ~ "SI"),
+         Slope_higher = case_when(dist_Slope > 0 ~ "MC", T ~ "SI"))
+
+
 
 #png(filename = "length_site_dist.png", width = 9, height = 6,
    #units = "in", res = 300, bg = "transparent")
@@ -258,7 +622,7 @@ dist_MC_SI %>% ggplot(aes(x = length, y = dist)) +
 
 #png(filename = "HI_slope_site_comp.png", width = 9, height = 6,
     #units = "in", res = 300, bg = "transparent")
-events_merge %>% ggplot(aes(x = HI, y = Slope, group = as.factor(startDate), col = site)) +
+events_mergeV2 %>% ggplot(aes(x = HI, y = Slope, group = as.factor(startDate), col = site)) +
   geom_line(col = "grey") + 
   geom_point() + 
   facet_wrap(~var) + 
@@ -269,6 +633,28 @@ events_merge %>% ggplot(aes(x = HI, y = Slope, group = as.factor(startDate), col
   theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
                      legend.background = element_rect(fill = "transparent")) 
 #dev.off()
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+png(filename = "HI_slope_site_long.png", width = 10, height = 3,
+    units = "in", res = 300, bg = "transparent")
+events_mergeRaw %>% ggplot(aes(x = Slope, y = HI, group = as.factor(startDate), col = site)) +
+  #annotate("rect", xmin = -0.05, xmax = 0.05, ymin = -1, ymax = 1, alpha = .2, fill = "red") +
+  #annotate("rect", ymin = -0.05, ymax = 0.05, xmin = -1, xmax = 1, alpha = .2, fill = "red") +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  geom_vline(xintercept=0, linetype="dashed", color = "black") +
+  #geom_line(col = "grey") + 
+  geom_point() + 
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 1) + 
+  xlim(c(-1,1)) + ylim(c(-1, 1)) + ylab("Hysteresis Index") +
+  scale_color_manual(name = "Site", labels = c("Main Channel", "Backwater"), 
+                     values = cbPalette[2:3]) +
+  #scale_color_brewer(name = "Site", labels = c("Main Channel", "Backwater"), palette = "Dark2") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     panel.background=element_rect(fill="transparent"),
+                     legend.position = "bottom") 
+dev.off()
 
 
 ggplot(subset(events_SI_Final, var %in% c("chl", "bga")),
@@ -294,7 +680,208 @@ dist_MC_SI %>% ggplot(aes(x = startDate, y = dist)) +
   xlab("Start Date") + ylab("HI-Slope Euclidean Distance") +
   theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
                      legend.background = element_rect(fill = "transparent"))
+
+
+# distances by constituent
+dist_MC_SI %>% 
+  group_by(var) %>% 
+  summarize(avg_dist = mean(dist),
+            avg_HI = mean(dist_HI),
+            avg_HI_abs = mean(abs(dist_HI)),
+            HI_MC_higher = sum(HI_higher == "MC"),
+            HI_SI_higher = sum(HI_higher == "SI"),
+            avg_Slope = mean(dist_Slope),
+            avg_Slope_abs = mean(abs(dist_Slope)),
+            Slope_MC_higher = sum(Slope_higher == "MC"),
+            Slope_SI_higher = sum(Slope_higher == "SI"))
+
+# distances by constituent v2
+dist_MC_SI_V2 %>% 
+  group_by(var) %>% 
+  summarize(avg_dist = mean(dist),
+            avg_HI = mean(dist_HI),
+            avg_HI_abs = mean(abs(dist_HI)),
+            HI_MC_higher = sum(HI_higher == "MC"),
+            HI_SI_higher = sum(HI_higher == "SI"),
+            avg_Slope = mean(dist_Slope),
+            avg_Slope_abs = mean(abs(dist_Slope)),
+            Slope_MC_higher = sum(Slope_higher == "MC"),
+            Slope_SI_higher = sum(Slope_higher == "SI"))
+
+# distances by constituent raw data
+dist_MC_SI_Raw %>% 
+  group_by(var) %>% 
+  summarize(avg_dist = mean(dist),
+            avg_HI = mean(dist_HI),
+            avg_HI_abs = mean(abs(dist_HI)),
+            HI_MC_higher = sum(HI_higher == "MC"),
+            HI_SI_higher = sum(HI_higher == "SI"),
+            avg_Slope = mean(dist_Slope),
+            avg_Slope_abs = mean(abs(dist_Slope)),
+            Slope_MC_higher = sum(Slope_higher == "MC"),
+            Slope_SI_higher = sum(Slope_higher == "SI"))
 ```
+
+```{r linear regressions function}
+events_SI_metric <- events_SI_Final2 %>% 
+  mutate(dis_change = 0.02831685*dis_change,
+         max_dis = 0.02831685*max_dis,
+         precip = 2.54*precip,
+         precipYear = 2.54*precipYear,
+         prev_month_dis = 0.02831685*prev_month_dis)
+
+events_SI_V2_metric<- events_SI_V2_Final2 %>% 
+  mutate(dis_change = 0.02831685*dis_change,
+         max_dis = 0.02831685*max_dis,
+         precip = 2.54*precip,
+         precipYear = 2.54*precipYear,
+         prev_month_dis = 0.02831685*prev_month_dis)
+
+events_SI_raw_metric<- events_SI_raw_Final2 %>% 
+  mutate(dis_change = 0.02831685*dis_change,
+         max_dis = 0.02831685*max_dis,
+         precip = 2.54*precip,
+         precipYear = 2.54*precipYear,
+         prev_month_dis = 0.02831685*prev_month_dis)
+
+# function that returns the p value from a linear model output
+lmp <- function (modelobject) {
+    if (class(modelobject) != "lm") stop("Not an object of class 'lm' ")
+    f <- summary(modelobject)$fstatistic
+    p <- pf(f[1],f[2],f[3],lower.tail=F)
+    attributes(p) <- NULL
+    return(p)
+}
+
+# function to add a row of regression info to a tibble
+add.regression.SI <- function(data, cons, met){
+  subset <- data %>% filter(var == cons)
+  metVec <- subset %>% pull(met)
+  regHI <- lm(subset$HI ~ metVec)
+  regSl <- lm(subset$Slope ~ metVec)
+  
+  return(regressions_SI %>% add_row(constituent = cons, metric = met,
+                                    p_HI = lmp(regHI), 
+                                    Rsqd_HI = summary(regHI)$r.squared,
+                                    slope_HI = as.numeric(regHI$coefficients[2]),
+                                    intercept_HI = as.numeric(regHI$coefficients[1]),
+                                    p_Sl = lmp(regSl), 
+                                    Rsqd_Sl = summary(regSl)$r.squared,
+                                    slope_Sl = as.numeric(regSl$coefficients[2]),
+                                    intercept_Sl = as.numeric(regSl$coefficients[1])))
+  
+}
+
+
+# initialize table of regression info
+regressions_SI <- tibble (constituent = character(), metric = character(),
+                          p_HI = numeric(), Rsqd_HI = numeric(), 
+                          slope_HI = numeric(), intercept_HI = numeric(),
+                          p_Sl = numeric(), Rsqd_Sl = numeric(),
+                          slope_Sl = numeric(), intercept_Sl = numeric())
+
+
+# add all regressions
+constituents <- c("bga", "chl", "fdom", "n03", "turb")
+metrics <- c("length", "dis_change", "max_dis", "avg_temp", 
+             "precip", "precipYear", "prev_month_dis")
+
+for(c in constituents){
+  for(m in metrics){
+    regressions_SI <- add.regression.SI(events_SI_metric, c, m)
+  }
+}
+
+write_csv(regressions_SI, "data/reg_SI_metric.csv")
+
+##### v2 #####
+# function to add a row of regression info to a tibble
+add.regression.SI.V2 <- function(data, cons, met){
+  subset <- data %>% filter(var == cons)
+  metVec <- subset %>% pull(met)
+  regHI <- lm(subset$HI ~ metVec)
+  regSl <- lm(subset$Slope ~ metVec)
+  
+  return(regressions_SI_V2 %>% add_row(constituent = cons, metric = met,
+                                    p_HI = lmp(regHI), 
+                                    Rsqd_HI = summary(regHI)$r.squared,
+                                    slope_HI = as.numeric(regHI$coefficients[2]),
+                                    intercept_HI = as.numeric(regHI$coefficients[1]),
+                                    p_Sl = lmp(regSl), 
+                                    Rsqd_Sl = summary(regSl)$r.squared,
+                                    slope_Sl = as.numeric(regSl$coefficients[2]),
+                                    intercept_Sl = as.numeric(regSl$coefficients[1])))
+  
+}
+
+
+# initialize table of regression info
+regressions_SI_V2 <- tibble (constituent = character(), metric = character(),
+                          p_HI = numeric(), Rsqd_HI = numeric(), 
+                          slope_HI = numeric(), intercept_HI = numeric(),
+                          p_Sl = numeric(), Rsqd_Sl = numeric(),
+                          slope_Sl = numeric(), intercept_Sl = numeric())
+
+
+# add all regressions
+constituents <- c("bga", "chl", "fdom", "n03", "turb")
+metrics <- c("length", "dis_change", "max_dis", "avg_temp", 
+             "precip", "precipYear", "prev_month_dis")
+
+for(c in constituents){
+  for(m in metrics){
+    regressions_SI_V2 <- add.regression.SI.V2(events_SI_V2_metric, c, m)
+  }
+}
+
+write_csv(regressions_SI_V2, "data/reg_SI_metric_v2.csv")
+
+##### raw data version #####
+
+# function to add a row of regression info to a tibble
+add.regression.SI.raw <- function(data, cons, met){
+  subset <- data %>% filter(var == cons)
+  metVec <- subset %>% pull(met)
+  regHI <- lm(subset$HI ~ metVec)
+  regSl <- lm(subset$Slope ~ metVec)
+  
+  return(regressions_SI_raw %>% add_row(constituent = cons, metric = met,
+                                    p_HI = lmp(regHI), 
+                                    Rsqd_HI = summary(regHI)$r.squared,
+                                    slope_HI = as.numeric(regHI$coefficients[2]),
+                                    intercept_HI = as.numeric(regHI$coefficients[1]),
+                                    p_Sl = lmp(regSl), 
+                                    Rsqd_Sl = summary(regSl)$r.squared,
+                                    slope_Sl = as.numeric(regSl$coefficients[2]),
+                                    intercept_Sl = as.numeric(regSl$coefficients[1])))
+  
+}
+
+
+# initialize table of regression info
+regressions_SI_raw <- tibble (constituent = character(), metric = character(),
+                          p_HI = numeric(), Rsqd_HI = numeric(), 
+                          slope_HI = numeric(), intercept_HI = numeric(),
+                          p_Sl = numeric(), Rsqd_Sl = numeric(),
+                          slope_Sl = numeric(), intercept_Sl = numeric())
+
+
+# add all regressions
+constituents <- c("bga", "chl", "fdom", "n03", "turb")
+metrics <- c("length", "dis_change", "max_dis", "avg_temp", 
+             "precip", "precipYear", "prev_month_dis")
+
+for(c in constituents){
+  for(m in metrics){
+    regressions_SI_raw <- add.regression.SI.raw(events_SI_raw_metric, c, m)
+  }
+}
+
+write_csv(regressions_SI_raw, "data/reg_SI_metric_raw.csv")
+
+regressions_SI_raw <- read.csv("data/reg_SI_metric_raw.csv")
+```
+
 
 ```{r}
 # multiple linear regression function for HI
@@ -537,9 +1124,22 @@ summary(lmNO3PrecipYearSlope)
 #====== nO3 HI ======
 
 # positive
+lmNO3PeakHI <- lm(events_SI_NO3$HI ~ events_SI_NO3$max_dis)
+png(filename = "NO3PeakHI.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
 events_SI_NO3 %>% ggplot(aes(x = max_dis, y = HI)) +
-  geom_point()
-summary(lm(events_SI_NO3$HI ~ events_SI_NO3$max_dis))
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Peak Discharge (ft^3/s)") +
+  ylab("Hysteresis Index") +
+  annotate(geom = "text", x = 70000, y = 0.5, hjust = 0, 
+           label = "p = 0.075", col = "blue") +
+  annotate(geom = "text", x = 70000, y = 0.6, hjust = 0,
+           label = "R-squared = 0.383", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmNO3PeakHI)
 
 # positive, not sig but maybe because of a single outlier
 events_SI_NO3 %>% ggplot(aes(x = precip, y = HI)) +
@@ -547,9 +1147,22 @@ events_SI_NO3 %>% ggplot(aes(x = precip, y = HI)) +
 summary(lm(events_SI_NO3$HI ~ events_SI_NO3$precip))
 
 # positive
+lmNO3AntDisHI <- lm(events_SI_NO3$HI ~ events_SI_NO3$prev_month_dis)
+png(filename = "NO3AntDisHI.png", width = 6, height = 4,
+    units = "in", res = 300, bg = "transparent")
 events_SI_NO3 %>% ggplot(aes(x = prev_month_dis, y = HI)) +
-  geom_point()
-summary(lm(events_SI_NO3$HI ~ events_SI_NO3$prev_month_dis))
+  geom_point() +
+  geom_smooth(method = "lm", se = F) +
+  xlab("Peak Discharge (ft^3/s)") +
+  ylab("Hysteresis Index") +
+  annotate(geom = "text", x = 170000000000, y = 0.2, hjust = 0, 
+           label = "p = 0.077", col = "blue") +
+  annotate(geom = "text", x = 170000000000, y = 0.1, hjust = 0,
+           label = "R-squared = 0.380", col = "blue") +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"))
+dev.off()
+summary(lmNO3AntDisHI)
 
 
 #====== chl slope ======
@@ -619,4 +1232,229 @@ summary(lmBgaAntDisSlope)
 
 ```
 
+```{r boxplots}
+
+# need to reorder the slope directions
+events_SI_Final2$slope_dir <- factor(events_SI_Final2$slope_dir, 
+                                 levels = c("flushing", "constant", "dilution"),
+                                 labels = c("Flushing", "Constant", "Dilution"))
+events_SI_V2_Final2$slope_dir <- factor(events_SI_V2_Final2$slope_dir, 
+                                 levels = c("flushing", "constant", "dilution"),
+                                 labels = c("Flushing", "Constant", "Dilution"))
+events_SI_raw_Final2$slope_dir <- factor(events_SI_raw_Final2$slope_dir, 
+                                 levels = c("flushing", "constant", "dilution"),
+                                 labels = c("Flushing", "Constant", "Dilution"))
+# need to reorder the hysteresis directions
+events_SI_Final2$H_dir <- factor(events_SI_Final2$H_dir, 
+                             levels = c("clockwise", "none", "counter-clockwise"),
+                             labels = c("Clockwise", "No Hysteresis", "Counter-clockwise"))
+events_SI_V2_Final2$H_dir <- factor(events_SI_V2_Final2$H_dir, 
+                             levels = c("clockwise", "none", "counter-clockwise"),
+                             labels = c("Clockwise", "No Hysteresis", "Counter-clockwise"))
+events_SI_raw_Final2$H_dir <- factor(events_SI_raw_Final2$H_dir, 
+                             levels = c("clockwise", "none", "counter-clockwise"),
+                             labels = c("Clockwise", "No Hysteresis", "Counter-clockwise"))
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+
+png("bar_grid_SI_V2.png", width = 6, height = 5,
+    units = "in", res = 300, bg = "transparent")
+events_SI_V2_Final2 %>% 
+  ggplot(aes(x = var, y = (..count..)/11, fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir), rows = vars(slope_dir), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom") +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events")+
+  ylim(c(0,0.5))
+dev.off()
+
+png("bar_grid_SI_raw.png", width = 6, height = 5,
+    units = "in", res = 300, bg = "transparent")
+events_SI_raw_Final2 %>% 
+  ggplot(aes(x = var, y = (..count..)/11, fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir), rows = vars(slope_dir), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom") +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events")+
+  ylim(c(0,0.5))
+dev.off()
+
+png("bar_grid_MC_raw2.png", width = 6, height = 5,
+    units = "in", res = 300, bg = "transparent")
+eventsRawFinal3 %>% 
+  ggplot(aes(x = var, y = (..count..)/18, fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir2), rows = vars(slope_dir2), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom") +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events")+
+  ylim(c(0,0.5))
+dev.off()
+
+
+
+events_mergeRaw$var = factor(events_mergeRaw$var, 
+                                levels = c("bga", "chl", "fdom", "n03", "turb"),
+                                labels = c("BGA", "Chl-a", "FDOM", "Nitrate", "Turbidity"))
+
+HI_box <- events_mergeRaw %>% 
+  ggplot(aes(x = var, y = HI, col = site)) +
+  #geom_violin() +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position=position_jitterdodge(0.1)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  xlab("Constituent") +
+  ylim(c(-1,1)) +
+  scale_color_manual(name = "Site", labels = c("Main Channel", "Backwater"), 
+                     values = cbPalette[2:3]) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+Slope_box <- events_mergeRaw %>% 
+  ggplot(aes(x = var, y = Slope, col = site)) +
+  #geom_violin() +
+  geom_boxplot(outlier.shape = NA) +
+  geom_point(position=position_jitterdodge(0.1)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "black") +
+  xlab("Constituent") +
+  ylim(c(-1,1)) +
+  scale_color_manual(name = "Site", labels = c("Main Channel", "Backwater"), 
+                     values = cbPalette[2:3]) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+
+png("box_HI_slope.png", width = 12, height = 3,
+    units = "in", res = 300, bg = "transparent")
+ggarrange(HI_box, Slope_box, nrow = 1, common.legend = T, legend = "right")
+dev.off()
+
+
+events_mergeRaw$var = factor(events_mergeRaw$var, 
+                                levels = c("bga", "chl", "fdom", "turb", "n03"),
+                                labels = c("BGA", "Chl-a", "FDOM", "Turbidity", "Nitrate"))
+
+png("box_HI_fdom_turb.png", width = 5, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_mergeRaw %>% filter(site == "MC", var %in% c("FDOM", "Turbidity", "Nitrate")) %>% 
+  ggplot(aes(x = var, y = HI)) +
+  #geom_violin() +
+  geom_boxplot(outlier.shape = NA, width = 0.75) +
+  geom_point(position=position_jitter(0.1)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  xlab("Constituent") +
+  ylim(c(-1,1)) +
+  #scale_color_manual(name = "Site", labels = c("Main Channel", "Backwater"), 
+                     #values = cbPalette[2:3]) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+dev.off()
+
+png("box_Slope_SI.png", width = 5, height = 4,
+    units = "in", res = 300, bg = "transparent")
+events_mergeRaw %>% filter(site == "SI", var != "BGA") %>% 
+  ggplot(aes(x = var, y = Slope)) +
+  #geom_violin() +
+  geom_boxplot(outlier.shape = NA, width = 0.75) +
+  geom_point(position=position_jitter(0.1)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  xlab("Constituent") +
+  ylab("Slope") +
+  ylim(c(-1,1)) +
+  #scale_color_manual(name = "Site", labels = c("Main Channel", "Backwater"), 
+                     #values = cbPalette[2:3]) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+dev.off()
+  
+  
+
+```
+
+```{r event response counts}
+response_counts <- events_mergeRaw %>% group_by(var, site, H_dir, slope_dir)  %>% 
+  summarize(n = n())
+
+HI_counts <- events_mergeRaw %>% group_by(var, site, H_dir)  %>% 
+  summarize(n = n())
+
+Slope_counts <- events_mergeRaw %>% group_by(var, site, slope_dir)  %>% 
+  summarize(n = n())
+
+write.csv(response_counts, file = "response_counts.csv")
+write.csv(HI_counts, file = "HI_counts.csv")
+write.csv(Slope_counts, file = "slope_counts.csv")
+
+
+response_countsAbs <- events_mergeRawAbs %>% group_by(var, site, H_dir2, slope_dir2)  %>% 
+  summarize(n = n())
+
+HI_countsAbs <- events_mergeRawAbs %>% group_by(var, site, H_dir2)  %>% 
+  summarize(n = n())
+
+Slope_countsAbs <- events_mergeRawAbs %>% group_by(var, site, slope_dir2)  %>% 
+  summarize(n = n())
+
+write.csv(response_countsAbs, file = "response_countsAbs.csv")
+write.csv(HI_countsAbs, file = "HI_countsAbs.csv")
+write.csv(Slope_countsAbs, file = "slope_countsAbs.csv")
+```
+
+```{r event response means/medians}
+responses_summary <- events_mergeRaw %>% group_by(var, site) %>% 
+  summarize(meanHI = mean(HI, na.rm = T), medianHI = median(HI, na.rm = T),
+            meanS = mean(Slope, na.rm = T), medianS = median(Slope, na.rm = T),
+            IQR_HI = IQR(HI, na.rm = T), IQR_SI = IQR(Slope, na.rm = T))
+
+responses_summry_box<- events_mergeRaw %>% group_by(var, site) %>% 
+  summarize(medianHI = median(HI, na.rm = T),
+            medianS = median(Slope, na.rm = T),
+            IQR_HI = IQR(HI, na.rm = T), 
+            IQR_SI = IQR(Slope, na.rm = T))
+
+write.csv(responses_summry_box, "responses_summary_box.csv")
+
+#### sig diff tests ####
+MC_bga <- events_mergeRaw %>% filter(var == "bga", site == "MC")
+SI_bga <- events_mergeRaw %>% filter(var == "bga", site == "SI")
+t.test(MC_bga$HI, SI_bga$HI)
+t.test(MC_bga$Slope, SI_bga$Slope)
+
+MC_chl <- events_mergeRaw %>% filter(var == "chl", site == "MC")
+SI_chl <- events_mergeRaw %>% filter(var == "chl", site == "SI")
+t.test(MC_chl$HI, SI_chl$HI)
+t.test(MC_chl$Slope, SI_chl$Slope)
+
+MC_fdom <- events_mergeRaw %>% filter(var == "fdom", site == "MC")
+SI_fdom <- events_mergeRaw %>% filter(var == "fdom", site == "SI")
+t.test(MC_fdom$HI, SI_fdom$HI)
+t.test(MC_fdom$Slope, SI_fdom$Slope)
+
+MC_turb <- events_mergeRaw %>% filter(var == "turb", site == "MC")
+SI_turb <- events_mergeRaw %>% filter(var == "turb", site == "SI")
+t.test(MC_turb$HI, SI_turb$HI)
+t.test(MC_turb$Slope, SI_turb$Slope)
+
+MC_n03 <- events_mergeRaw %>% filter(var == "n03", site == "MC")
+SI_n03 <- events_mergeRaw %>% filter(var == "n03", site == "SI")
+t.test(MC_n03$HI, SI_n03$HI)
+t.test(MC_n03$Slope, SI_n03$Slope)
+
+```
 

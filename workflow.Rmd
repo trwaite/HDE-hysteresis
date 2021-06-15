@@ -7,9 +7,16 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(magrittr)
 library(tidyverse)
 library(lubridate)
 library(dataRetrieval)
+library(ggsci)
+library(ggthemes)
+
+source("event_functions.R")
+source("C_Q_plotting_functions.R")
+source("event_stats_functions.R")
 ```
 
 This document contains the entire high discharge event (HDE) workflow, including reading in the discharge, water quality, and precipitation data, performing data wrangling, identifying HDEs, calculating slope and hysteresis index for each constituent, and statistically analyzing the resulting data. 
@@ -24,7 +31,7 @@ mc <- read_csv("data/MC_WQ.csv")
 si <- read_csv("data/SI_WQ.csv")
 
 # discharge data
-unitDischarge <- readNWISuv(siteNumbers = "05378500", parameterCd="00060", startDate = "2015-06-01", endDate = "2018-10-12") %>% 
+unitDischarge <- readNWISuv(siteNumbers = "05378500", parameterCd="00060", startDate = "2015-04-01", endDate = "2018-10-31") %>% 
   mutate(discharge = X_00060_00000)
 
 # precip data from winona, mn 
@@ -83,6 +90,411 @@ all_WQ_hour <- all_WQ %>%
 
 # merge discharge and WQ for all years
 WQ_hourly_discharge <- full_join(all_WQ_hour, discharge_mean_hourly, by = c("date", "hour"))
+
+```
+
+```{r constituent summaries}
+##### MC 2015 #####
+study_2015_MC <- WQ_hourly_discharge %>% 
+  filter(site == "MC",
+         date >= mdy("06-02-2015"),
+         date <= mdy("10-21-2015"))
+
+mean(study_2015_MC$Turb, na.rm = T)
+sd(study_2015_MC$Turb, na.rm = T)
+
+mean(study_2015_MC$CHLugL, na.rm = T)
+sd(study_2015_MC$CHLugL, na.rm = T)
+
+mean(study_2015_MC$BGAugL, na.rm = T)
+sd(study_2015_MC$BGAugL, na.rm = T)
+
+mean(study_2015_MC$FDOMqsu, na.rm = T)
+sd(study_2015_MC$FDOMqsu, na.rm = T)
+
+mean(study_2015_MC$NO3_mgL, na.rm = T)
+sd(study_2015_MC$NO3_mgL, na.rm = T)
+
+##### MC 2016 #####
+study_2016_MC <- WQ_hourly_discharge %>% 
+  filter(site == "MC",
+         date >= mdy("04-13-2016"),
+         date <= mdy("10-31-2016"))
+
+mean(study_2016_MC$Turb, na.rm = T)
+sd(study_2016_MC$Turb, na.rm = T)
+
+mean(study_2016_MC$CHLugL, na.rm = T)
+sd(study_2016_MC$CHLugL, na.rm = T)
+
+mean(study_2016_MC$BGAugL, na.rm = T)
+sd(study_2016_MC$BGAugL, na.rm = T)
+
+mean(study_2016_MC$FDOMqsu, na.rm = T)
+sd(study_2016_MC$FDOMqsu, na.rm = T)
+
+mean(study_2016_MC$NO3_mgL, na.rm = T)
+sd(study_2016_MC$NO3_mgL, na.rm = T)
+
+##### MC 2017 #####
+study_2017_MC <- WQ_hourly_discharge %>% 
+  filter(site == "MC",
+         date >= mdy("06-09-2017"),
+         date <= mdy("10-26-2017"))
+
+mean(study_2017_MC$Turb, na.rm = T)
+sd(study_2017_MC$Turb, na.rm = T)
+
+mean(study_2017_MC$CHLugL, na.rm = T)
+sd(study_2017_MC$CHLugL, na.rm = T)
+
+mean(study_2017_MC$BGAugL, na.rm = T)
+sd(study_2017_MC$BGAugL, na.rm = T)
+
+mean(study_2017_MC$FDOMqsu, na.rm = T)
+sd(study_2017_MC$FDOMqsu, na.rm = T)
+
+mean(study_2017_MC$NO3_mgL, na.rm = T)
+sd(study_2017_MC$NO3_mgL, na.rm = T)
+
+##### MC 2018 #####
+study_2018_MC <- WQ_hourly_discharge %>% 
+  filter(site == "MC",
+         date >= mdy("05-08-2018"),
+         date <= mdy("10-12-2018"))
+
+mean(study_2018_MC$Turb, na.rm = T)
+sd(study_2018_MC$Turb, na.rm = T)
+
+mean(study_2018_MC$CHLugL, na.rm = T)
+sd(study_2018_MC$CHLugL, na.rm = T)
+
+mean(study_2018_MC$BGAugL, na.rm = T)
+sd(study_2018_MC$BGAugL, na.rm = T)
+
+mean(study_2018_MC$FDOMqsu, na.rm = T)
+sd(study_2018_MC$FDOMqsu, na.rm = T)
+
+mean(study_2018_MC$NO3_mgL, na.rm = T)
+sd(study_2018_MC$NO3_mgL, na.rm = T)
+
+
+##### SI 2015 #####
+study_2015_SI <- WQ_hourly_discharge %>% 
+  filter(site == "SI",
+         date >= mdy("06-02-2015"),
+         date <= mdy("10-21-2015"))
+
+mean(study_2015_SI$Turb, na.rm = T)
+sd(study_2015_SI$Turb, na.rm = T)
+
+mean(study_2015_SI$CHLugL, na.rm = T)
+sd(study_2015_SI$CHLugL, na.rm = T)
+
+mean(study_2015_SI$BGAugL, na.rm = T)
+sd(study_2015_SI$BGAugL, na.rm = T)
+
+mean(study_2015_SI$FDOMqsu, na.rm = T)
+sd(study_2015_SI$FDOMqsu, na.rm = T)
+
+mean(study_2015_SI$NO3_mgL, na.rm = T)
+sd(study_2015_SI$NO3_mgL, na.rm = T)
+
+##### SI 2016 #####
+study_2016_SI <- WQ_hourly_discharge %>% 
+  filter(site == "SI",
+         date >= mdy("04-13-2016"),
+         date <= mdy("10-31-2016"))
+
+mean(study_2016_SI$Turb, na.rm = T)
+sd(study_2016_SI$Turb, na.rm = T)
+
+mean(study_2016_SI$CHLugL, na.rm = T)
+sd(study_2016_SI$CHLugL, na.rm = T)
+
+mean(study_2016_SI$BGAugL, na.rm = T)
+sd(study_2016_SI$BGAugL, na.rm = T)
+
+mean(study_2016_SI$FDOMqsu, na.rm = T)
+sd(study_2016_SI$FDOMqsu, na.rm = T)
+
+mean(study_2016_SI$NO3_mgL, na.rm = T)
+sd(study_2016_SI$NO3_mgL, na.rm = T)
+
+##### SI 2017 #####
+study_2017_SI <- WQ_hourly_discharge %>% 
+  filter(site == "SI",
+         date >= mdy("06-09-2017"),
+         date <= mdy("10-26-2017"))
+
+mean(study_2017_SI$Turb, na.rm = T)
+sd(study_2017_SI$Turb, na.rm = T)
+
+mean(study_2017_SI$CHLugL, na.rm = T)
+sd(study_2017_SI$CHLugL, na.rm = T)
+
+mean(study_2017_SI$BGAugL, na.rm = T)
+sd(study_2017_SI$BGAugL, na.rm = T)
+
+mean(study_2017_SI$FDOMqsu, na.rm = T)
+sd(study_2017_SI$FDOMqsu, na.rm = T)
+
+mean(study_2017_SI$NO3_mgL, na.rm = T)
+sd(study_2017_SI$NO3_mgL, na.rm = T)
+
+##### MC 2018 #####
+study_2018_SI <- WQ_hourly_discharge %>% 
+  filter(site == "SI",
+         date >= mdy("05-08-2018"),
+         date <= mdy("10-12-2018"))
+
+mean(study_2018_SI$Turb, na.rm = T)
+sd(study_2018_SI$Turb, na.rm = T)
+
+mean(study_2018_SI$CHLugL, na.rm = T)
+sd(study_2018_SI$CHLugL, na.rm = T)
+
+mean(study_2018_SI$BGAugL, na.rm = T)
+sd(study_2018_SI$BGAugL, na.rm = T)
+
+mean(study_2018_SI$FDOMqsu, na.rm = T)
+sd(study_2018_SI$FDOMqsu, na.rm = T)
+
+mean(study_2018_SI$NO3_mgL, na.rm = T)
+sd(study_2018_SI$NO3_mgL, na.rm = T)
+
+
+##### comparing SI and MC #####
+
+# nitrate sig higher in MC than SI all 4 years
+t.test(study_2015_MC$NO3_mgL, study_2015_SI$NO3_mgL)
+t.test(study_2016_MC$NO3_mgL, study_2016_SI$NO3_mgL)
+t.test(study_2017_MC$NO3_mgL, study_2017_SI$NO3_mgL)
+t.test(study_2018_MC$NO3_mgL, study_2018_SI$NO3_mgL)
+
+# turb sig higher in MC than SI all 4 years
+t.test(study_2015_MC$Turb, study_2015_SI$Turb)
+t.test(study_2016_MC$Turb, study_2016_SI$Turb)
+t.test(study_2017_MC$Turb, study_2017_SI$Turb)
+t.test(study_2018_MC$Turb, study_2018_SI$Turb)
+
+# fdom sig higher in SI than MC in 2015, opposite other 3 years
+t.test(study_2015_MC$FDOMqsu, study_2015_SI$FDOMqsu)
+t.test(study_2016_MC$FDOMqsu, study_2016_SI$FDOMqsu)
+t.test(study_2017_MC$FDOMqsu, study_2017_SI$FDOMqsu)
+t.test(study_2018_MC$FDOMqsu, study_2018_SI$FDOMqsu)
+
+# chl sig higher in MC than SI all 4 years
+t.test(study_2015_MC$CHLugL, study_2015_SI$CHLugL)
+t.test(study_2016_MC$CHLugL, study_2016_SI$CHLugL)
+t.test(study_2017_MC$CHLugL, study_2017_SI$CHLugL)
+t.test(study_2018_MC$CHLugL, study_2018_SI$CHLugL)
+
+# bga sig higher in MC than SI all 4 years
+t.test(study_2015_MC$BGAugL, study_2015_SI$BGAugL)
+t.test(study_2016_MC$BGAugL, study_2016_SI$BGAugL)
+t.test(study_2017_MC$BGAugL, study_2017_SI$BGAugL)
+t.test(study_2018_MC$BGAugL, study_2018_SI$BGAugL)
+
+##### comparing years #####
+
+# bga MC: 2016, 2015, 2017, 2018
+t.test(study_2015_MC$BGAugL, study_2016_MC$BGAugL) # 2015 > 2016
+t.test(study_2015_MC$BGAugL, study_2017_MC$BGAugL) # 2017 > 2015
+t.test(study_2015_MC$BGAugL, study_2018_MC$BGAugL) # 2018 > 2015
+t.test(study_2016_MC$BGAugL, study_2017_MC$BGAugL) # 2017 > 2016
+t.test(study_2016_MC$BGAugL, study_2018_MC$BGAugL) # 2018 > 2016
+t.test(study_2017_MC$BGAugL, study_2018_MC$BGAugL) # 2018 > 2017
+
+# bga SI: 2015/2017, 2016, 2018
+t.test(study_2015_SI$BGAugL, study_2016_SI$BGAugL) # 2016 > 2015
+t.test(study_2015_SI$BGAugL, study_2017_SI$BGAugL) # 2017 = 2015
+t.test(study_2015_SI$BGAugL, study_2018_SI$BGAugL) # 2018 > 2015
+t.test(study_2016_SI$BGAugL, study_2017_SI$BGAugL) # 2016 > 2017
+t.test(study_2016_SI$BGAugL, study_2018_SI$BGAugL) # 2018 > 2016
+t.test(study_2017_SI$BGAugL, study_2018_SI$BGAugL) # 2018 > 2017
+
+# chl MC: 2016, 2018, 2017, 2015
+t.test(study_2015_MC$CHLugL, study_2016_MC$CHLugL) # 2015 > 2016
+t.test(study_2015_MC$CHLugL, study_2017_MC$CHLugL) # 2015 > 2017
+t.test(study_2015_MC$CHLugL, study_2018_MC$CHLugL) # 2015 > 2018
+t.test(study_2016_MC$CHLugL, study_2017_MC$CHLugL) # 2017 > 2016
+t.test(study_2016_MC$CHLugL, study_2018_MC$CHLugL) # 2018 > 2016
+t.test(study_2017_MC$CHLugL, study_2018_MC$CHLugL) # 2017 > 2018
+
+# chl SI: 2015, 2017, 2018, 2016
+t.test(study_2015_SI$CHLugL, study_2016_SI$CHLugL) # 2016 > 2015
+t.test(study_2015_SI$CHLugL, study_2017_SI$CHLugL) # 2017 > 2015
+t.test(study_2015_SI$CHLugL, study_2018_SI$CHLugL) # 2018 > 2015
+t.test(study_2016_SI$CHLugL, study_2017_SI$CHLugL) # 2016 > 2017
+t.test(study_2016_SI$CHLugL, study_2018_SI$CHLugL) # 2016 > 2018
+t.test(study_2017_SI$CHLugL, study_2018_SI$CHLugL) # 2018 > 2017
+
+# fdom MC: 2015, 2017, 2016/2018
+t.test(study_2015_MC$FDOMqsu, study_2016_MC$FDOMqsu) # 2016 > 2015
+t.test(study_2015_MC$FDOMqsu, study_2017_MC$FDOMqsu) # 2017 > 2015
+t.test(study_2015_MC$FDOMqsu, study_2018_MC$FDOMqsu) # 2018 > 2015
+t.test(study_2016_MC$FDOMqsu, study_2017_MC$FDOMqsu) # 2016 > 2017
+t.test(study_2016_MC$FDOMqsu, study_2018_MC$FDOMqsu) # 2018 = 2016
+t.test(study_2017_MC$FDOMqsu, study_2018_MC$FDOMqsu) # 2018 > 2017
+
+# fdom SI: 2015, 2017, 2018, 2016
+t.test(study_2015_SI$FDOMqsu, study_2016_SI$FDOMqsu) # 2016 > 2015
+t.test(study_2015_SI$FDOMqsu, study_2017_SI$FDOMqsu) # 2017 > 2015
+t.test(study_2015_SI$FDOMqsu, study_2018_SI$FDOMqsu) # 2018 > 2015
+t.test(study_2016_SI$FDOMqsu, study_2017_SI$FDOMqsu) # 2016 > 2017
+t.test(study_2016_SI$FDOMqsu, study_2018_SI$FDOMqsu) # 2016 > 2018
+t.test(study_2017_SI$FDOMqsu, study_2018_SI$FDOMqsu) # 2018 > 2017
+
+# nO3 MC: 2015, 2017, 2018, 2016
+t.test(study_2015_MC$NO3_mgL, study_2016_MC$NO3_mgL) # 2016 > 2015
+t.test(study_2015_MC$NO3_mgL, study_2017_MC$NO3_mgL) # 2017 > 2015
+t.test(study_2015_MC$NO3_mgL, study_2018_MC$NO3_mgL) # 2018 > 2015
+t.test(study_2016_MC$NO3_mgL, study_2017_MC$NO3_mgL) # 2016 > 2017
+t.test(study_2016_MC$NO3_mgL, study_2018_MC$NO3_mgL) # 2016 > 2018
+t.test(study_2017_MC$NO3_mgL, study_2018_MC$NO3_mgL) # 2018 > 2017
+
+# nO3 SI: 2015, 2017, 2018, 2016
+t.test(study_2015_SI$NO3_mgL, study_2016_SI$NO3_mgL) # 2016 > 2015
+t.test(study_2015_SI$NO3_mgL, study_2017_SI$NO3_mgL) # 2017 > 2015
+t.test(study_2015_SI$NO3_mgL, study_2018_SI$NO3_mgL) # 2018 > 2015
+t.test(study_2016_SI$NO3_mgL, study_2017_SI$NO3_mgL) # 2016 > 2017
+t.test(study_2016_SI$NO3_mgL, study_2018_SI$NO3_mgL) # 2016 > 2018
+t.test(study_2017_SI$NO3_mgL, study_2018_SI$NO3_mgL) # 2018 > 2017
+
+# turb MC: 2015, 2018, 2016, 2017
+t.test(study_2015_MC$Turb, study_2016_MC$Turb) # 2016 > 2015
+t.test(study_2015_MC$Turb, study_2017_MC$Turb) # 2017 > 2015
+t.test(study_2015_MC$Turb, study_2018_MC$Turb) # 2018 > 2015
+t.test(study_2016_MC$Turb, study_2017_MC$Turb) # 2017 > 2016
+t.test(study_2016_MC$Turb, study_2018_MC$Turb) # 2016 > 2018
+t.test(study_2017_MC$Turb, study_2018_MC$Turb) # 2017 > 2018
+
+# turb SI: 2015, 2016, 2018, 2017
+t.test(study_2015_SI$Turb, study_2016_SI$Turb) # 2016 > 2015
+t.test(study_2015_SI$Turb, study_2017_SI$Turb) # 2017 > 2015
+t.test(study_2015_SI$Turb, study_2018_SI$Turb) # 2018 > 2015
+t.test(study_2016_SI$Turb, study_2017_SI$Turb) # 2017 > 2016
+t.test(study_2016_SI$Turb, study_2018_SI$Turb) # 2018 > 2016
+t.test(study_2017_SI$Turb, study_2018_SI$Turb) # 2017 > 2018
+
+
+study_all <- WQ_hourly_discharge %>% 
+  filter(date >= mdy("06-02-2015") & date <= mdy("10-21-2015") |
+         date >= mdy("04-13-2016") & date <= mdy("10-31-2016") |
+         date >= mdy("06-09-2017") & date <= mdy("10-26-2017") |
+         date >= mdy("05-08-2018") & date <= mdy("10-12-2018") )
+
+bga_box <- study_all %>% 
+           drop_na() %>% 
+           ggplot(aes(x = factor(year(dateTime)), y = BGAugL, col = site)) +
+           geom_boxplot()
+
+chl_box <- study_all %>% 
+           drop_na() %>% 
+           ggplot(aes(x = factor(year(dateTime)), y = CHLugL, col = site)) +
+           geom_boxplot()
+
+fdom_box <- study_all %>% 
+            drop_na() %>% 
+            ggplot(aes(x = factor(year(dateTime)), y = FDOMqsu, col = site)) +
+            geom_boxplot()
+
+no3_box <- study_all %>% 
+           drop_na() %>% 
+           ggplot(aes(x = factor(year(dateTime)), y = NO3_mgL, col = site)) +
+           geom_boxplot()
+
+turb_box <- study_all %>% 
+            drop_na() %>% 
+            ggplot(aes(x = factor(year(dateTime)), y = Turb, col = site)) +
+            geom_boxplot()
+
+ggarrange(bga_box, chl_box, fdom_box, no3_box, turb_box, 
+          nrow = 3, ncol = 2, common.legend = T)
+
+```
+
+```{r hydrographs}
+check_during_event <- function(date){
+  for (i in 1:18){
+    if(date >= date(eventsTurb$startDate[i]) &
+       date <= date(eventsTurb$endDate[i])) {
+      return(T)
+       }
+  }
+  return(F)
+}
+
+WQ_hourly_discharge_startDates <- WQ_hourly_discharge %>% 
+  mutate (startDate = date(dateTime) %in% date(eventsFinal2$startDate),
+          during_event = sapply(date,check_during_event))
+
+just_starts <- WQ_hourly_discharge_startDates %>% 
+  filter(startDate, site == "MC", hour %in% c(0,1))
+
+just_events <- WQ_hourly_discharge_startDates %>% filter(during_event) %>% 
+  mutate(hourlyDischarge = case_when(date %in% just_starts$date ~ -1,
+                                     TRUE ~ hourlyDischarge))
+
+just_events$hourlyDischarge <- replace(just_events$hourlyDischarge, 
+                                       which(just_events$hourlyDischarge < 0), NA)
+
+library(patchwork)
+precipHydro <- precip2 %>% filter(month(Date) %in% c(4, 5, 6, 7, 8, 9, 10)) %>% 
+  mutate(date = Date, metPrecip = precip*2.54) 
+
+png(filename = "hydrographsPrecip.png", width = 6, height = 4, 
+    units = "in", res = 300, bg = "transparent")
+WQ_hourly_discharge_startDates %>% filter(month(date) %in% c(4, 5, 6, 7, 8, 9, 10)) %>% 
+  ggplot(aes(x = date, y = hourlyDischarge*0.02831685)) +
+  scale_y_continuous(sec.axis = sec_axis(trans=~.*.003, name="Daily Precipitation (cm)")) +
+  geom_bar(data = precipHydro, aes(x = Date, y = metPrecip/.003), stat = "identity",fill = "grey59") +
+  geom_line(col = "black") +
+  geom_line(data = just_events, aes(x = date, y = hourlyDischarge*0.02831685), col = "red") +
+  xlab("Time") + ylab(expression(paste("Discharge (m"^{3} ,"s"^{-1}, ")"))) +
+  geom_point(data = just_starts, 
+             aes(x = date, y = hourlyDischarge*0.02831685),
+             col = "blue", cex = 1) +
+  geom_vline(xintercept = mdy("06-02-2015"), lty = 2) +
+  geom_vline(xintercept = mdy("10-21-2015"), lty = 2) +
+  geom_vline(xintercept = mdy("04-13-2016"), lty = 2) +
+  geom_vline(xintercept = mdy("10-31-2016"), lty = 2) +
+  geom_vline(xintercept = mdy("06-09-2017"), lty = 2) +
+  geom_vline(xintercept = mdy("10-26-2017"), lty = 2) +
+  geom_vline(xintercept = mdy("05-08-2018"), lty = 2) +
+  geom_vline(xintercept = mdy("10-12-2018"), lty = 2) +
+  facet_wrap(vars(as.factor(year(date))), scales = "free_x") +
+  theme_bw() +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA),
+        legend.background = element_rect(fill = "transparent"), legend.position = "bottom") 
+dev.off()
+
+png(filename = "hydrographsLong.png", width = 10, height = 2, 
+    units = "in", res = 300, bg = "transparent")
+WQ_hourly_discharge_startDates %>% filter(month(date) %in% c(4, 5, 6, 7, 8, 9, 10)) %>% 
+  ggplot(aes(x = date, y = hourlyDischarge)) +
+  geom_line(col = "black") +
+  geom_line(data = just_events, aes(x = date, y = hourlyDischarge), col = "red") +
+  xlab("Time") + ylab(expression(paste("Discharge (m"^{3} ,"s"^{-1}, ")"))) +
+  geom_point(data = just_starts, 
+             aes(x = date, y = hourlyDischarge),
+             col = "blue", cex = 1) +
+  geom_vline(xintercept = mdy("06-02-2015"), lty = 2) +
+  geom_vline(xintercept = mdy("10-21-2015"), lty = 2) +
+  geom_vline(xintercept = mdy("04-13-2016"), lty = 2) +
+  geom_vline(xintercept = mdy("10-31-2016"), lty = 2) +
+  geom_vline(xintercept = mdy("06-09-2017"), lty = 2) +
+  geom_vline(xintercept = mdy("10-26-2017"), lty = 2) +
+  geom_vline(xintercept = mdy("05-08-2018"), lty = 2) +
+  geom_vline(xintercept = mdy("10-12-2018"), lty = 2) +
+  facet_wrap(vars(as.factor(year(date))), scales = "free_x", nrow = 1) +
+  theme_bw() +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA),
+        legend.background = element_rect(fill = "transparent"), legend.position = "bottom") 
+dev.off()
+
+
 
 ```
 
@@ -349,8 +761,8 @@ eventsCount2$month <- factor(eventsCount2$month,
                             levels = c("April", "May", "June", "July", "August", "September"))
 
 # figure: heatmap
-#png(filename = "monthly_event_count_grid.png", width = 6, height = 5.5,
-    #units = "in", res = 300, bg = "transparent")
+png(filename = "Figures/monthly_event_count_grid.png", width = 6, height = 5.5,
+    units = "in", res = 300, bg = "transparent")
 eventsCount2 %>% 
   ggplot(aes(x = year, y = month, fill = n)) +
   geom_tile(color = "black") +
@@ -359,13 +771,13 @@ eventsCount2 %>%
   theme_bw() + xlab("Year") + ylab("Month") +
   theme(plot.background = element_rect(fill = "transparent",colour = NA),
         legend.background = element_rect(fill = "transparent"), legend.position = "bottom") 
-#dev.off()  
+dev.off()  
 ```
 
 We can also make histograms to see the distributions of the event metrics:
 ```{r}
-#png(filename = "event_hists.png", width = 5, height = 5,
-    #units = "in", res = 300, bg = "transparent")
+png(filename = "Figures/event_hists.png", width = 5, height = 5,
+    units = "in", res = 300, bg = "transparent")
 par(mfrow = c(3,3), bg = "transparent", mgp=c(2.5,1,0), mar = c(5,2,1,2))
 hist(eventsTurb$avg_temp, breaks = c(14, 17, 20, 23, 26, 29),
      xlab = "Average temperature (C)", xlim = c(10, 30),
@@ -389,8 +801,33 @@ plot.new()
 hist(eventsTurb$prev_month_dis, breaks = 5,
      xlab = "Previous month discharge", 
      ylab = "Number of events", main = "")
-#dev.off()
+dev.off()
 ```
+
+```{r proportions of events}
+# get the total number of events classified as each slope/hi combo for MC
+eventsRawFinal2 %>% filter(var == "bga") %>% group_by(H_dir, slope_dir) %>% count() 
+eventsRawFinal2 %>% filter(var == "chl") %>% group_by(H_dir, slope_dir) %>% count()
+eventsRawFinal2 %>% filter(var == "fdom") %>% group_by(H_dir, slope_dir) %>% count()
+eventsRawFinal2 %>% filter(var == "n03") %>% group_by(H_dir, slope_dir) %>% count()
+eventsRawFinal2 %>% filter(var == "turb") %>% group_by(H_dir, slope_dir) %>% count()
+
+# get the total number of events classified as each slope/hi combo for SI
+events_SI_raw_Final2 %>% filter(var == "bga") %>% group_by(H_dir, slope_dir) %>% count() #11
+events_SI_raw_Final2 %>% filter(var == "chl") %>% group_by(H_dir, slope_dir) %>% count() #11
+events_SI_raw_Final2 %>% filter(var == "fdom") %>% group_by(H_dir, slope_dir) %>% count() #11
+events_SI_raw_Final2 %>% filter(var == "n03") %>% group_by(H_dir, slope_dir) %>% count() #11
+events_SI_raw_Final2 %>% filter(var == "turb") %>% group_by(H_dir, slope_dir) %>% count() #11
+
+# add a column for total number of events calculated for the constituent
+eventsRawFinal2 <- eventsRawFinal2 %>% 
+  mutate(varCount = case_when(var == "bga" ~ 16,
+                              var == "chl" ~ 18,
+                              var == "fdom" ~ 17,
+                              var == "n03" ~ 18,
+                              var == "turb" ~ 18))
+```
+
 
 ## HI/slope summary
 Next, we can look at the distributions of hysteresis and slope between constituents and events. 
@@ -412,8 +849,8 @@ eventsFinal2 %>%
   scale_color_brewer(palette = "Dark2", name = "Constituent", labels = var.labs) 
 
 # constituent-wise plots
-#png(filename = "HI_slope_const.png", 
-    #width = 4, height = 5, units = "in", res = 300, bg = "transparent")
+png(filename = "Figures/HI_slope_point.png", 
+    width = 4, height = 5, units = "in", res = 300, bg = "transparent")
 eventsFinal2 %>% 
   ggplot(aes(x = HI, y = Slope)) +
   geom_hline(yintercept=0, linetype="dashed", color = "red") +
@@ -422,7 +859,33 @@ eventsFinal2 %>%
   facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 3) +
   theme_bw() + xlab("Hysteresis Index") +
   theme(plot.background = element_rect(fill = "transparent",colour = NA))
-#dev.off()
+dev.off()
+
+png(filename = "Figures/HI_slope_point_v2.png", 
+    width = 4, height = 5, units = "in", res = 300, bg = "transparent")
+eventsV2Final2 %>% 
+  ggplot(aes(x = HI, y = Slope)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 3) +
+  theme_bw() + xlab("Hysteresis Index") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+
+png(filename = "Figures/HI_slope_point_raw.png", 
+    width = 4, height = 5, units = "in", res = 300, bg = "transparent")
+eventsRawFinal2 %>% 
+  ggplot(aes(x = HI, y = Slope)) +
+  geom_hline(yintercept=0, linetype="dashed", color = "red") +
+  geom_vline(xintercept=0, linetype="dashed", color = "red") +
+  geom_point() + xlim(-1, 1) + ylim(-1, 1) +
+  facet_wrap(~var, labeller = labeller(var = var.labs), nrow = 3) +
+  theme_bw() + xlab("Hysteresis Index") +
+  theme(plot.background = element_rect(fill = "transparent",colour = NA))
+dev.off()
+
+
 ```
 
 Next, we can visualize the categorical HI and slope data by making barplots
@@ -468,7 +931,118 @@ slopeBar <- eventsFinal2 %>%
     #width = 6, height = 6, units = "in", res = 300, bg = "transparent")
 ggarrange(hiBar, slopeBar, nrow = 2)
 #dev.off()
+
+# need to reorder the slope directions
+eventsFinal2$slope_dir <- factor(eventsFinal2$slope_dir, 
+                                 levels = c("flushing", "constant", "dilution"),
+                                 labels = c("Flushing", "Constant", "Dilution"))
+eventsV2Final2$slope_dir <- factor(eventsV2Final2$slope_dir, 
+                                 levels = c("flushing", "constant", "dilution"),
+                                 labels = c("Flushing", "Constant", "Dilution"))
+eventsRawFinal2$slope_dir <- factor(eventsRawFinal2$slope_dir, 
+                                 levels = c("flushing", "constant", "dilution"),
+                                 labels = c("Flushing", "Constant", "Dilution"))
+# need to reorder the hysteresis directions
+eventsFinal2$H_dir <- factor(eventsFinal2$H_dir, 
+                             levels = c("clockwise", "none", "counter-clockwise"),
+                             labels = c("Clockwise", "No Hysteresis", "Counter-clockwise"))
+eventsV2Final2$H_dir <- factor(eventsV2Final2$H_dir, 
+                             levels = c("clockwise", "none", "counter-clockwise"),
+                             labels = c("Clockwise", "No Hysteresis", "Counter-clockwise"))
+eventsRawFinal2$H_dir <- factor(eventsRawFinal2$H_dir, 
+                             levels = c("clockwise", "none", "counter-clockwise"),
+                             labels = c("Clockwise", "No Hysteresis", "Counter-clockwise"))
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+png("bar_grid_MC_v2.png", width = 6, height = 5,
+    units = "in", res = 300, bg = "transparent")
+eventsV2Final2 %>% 
+  ggplot(aes(x = var, y = (..count..)/nrow(eventsTurb), fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir), rows = vars(slope_dir), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom") +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events")
+dev.off()
+
+png("bar_grid_MC_raw.png", width = 6, height = 5,
+    units = "in", res = 300, bg = "transparent")
+eventsRawFinal2 %>% 
+  ggplot(aes(x = var, y = (..count..)/18, fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir), rows = vars(slope_dir), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom") +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events") +
+  ylim(c(0,0.5))
+dev.off()
+
+eventsRawFinal2 %>% 
+  ggplot(aes(x = var, y = (..count..), fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir), rows = vars(slope_dir), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom") +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events") +
+  ylim(c(0,0.6))
+
+eventsRawFinal2 %>% 
+  group_by(var, H_dir, slope_dir) %>% 
+  count()
 ```
+
+```{r classification without none/constant}
+eventsRawFinal3 <- eventsRawFinal2 %>% 
+  mutate(H_dir2 = case_when(HI > 0 ~ "Clockwise",
+                            T ~ "Counter-clockwise"),
+         slope_dir2 = case_when(Slope > 0 ~ "Flushing",
+                                T ~ "Dilution"))
+
+png("bar_grid_MC_4.png", width = 6, height = 5,
+    units = "in", res = 300, bg = "transparent")
+eventsRawFinal3 %>% 
+  ggplot(aes(x = var, y = (..count..)/18, fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir2), rows = vars(slope_dir2), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom",
+                     panel.background = element_rect(fill = "transparent")) +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events") +
+  ylim(c(0,0.75))
+dev.off()
+
+png("bar_grid_SI_4.png", width = 6, height = 5,
+    units = "in", res = 300, bg = "transparent")
+events_SI_raw_Final3 %>% 
+  ggplot(aes(x = var, y = (..count..)/11, fill = var)) +
+  geom_bar() +
+  facet_grid(cols = vars(H_dir2), rows = vars(slope_dir2), drop = F) +
+  theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA),
+                     legend.background = element_rect(fill = "transparent"),
+                     axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+                     legend.position = "bottom",
+                     panel.background = element_rect(fill = "transparent")) +
+  scale_fill_manual(values = cbPalette, labels = var.labs, name = "Constituent") +
+  xlab("") + ylab("Proportion of events") +
+  ylim(c(0,0.75))
+dev.off()
+
+
+```
+
 
 ## Pairwise constituent comparisons
 ```{r}
@@ -477,6 +1051,166 @@ ggarrange(hiBar, slopeBar, nrow = 2)
 
 
 # Relationships between event metrics and constituent responses
+
+```{r single regressions function}
+eventsFinalMetric <- eventsFinal2 %>% 
+  mutate(dis_change = 0.02831685*dis_change,
+         max_dis = 0.02831685*max_dis,
+         precip = 2.54*precip,
+         precipYear = 2.54*precipYear,
+         prev_month_dis = 0.02831685*prev_month_dis)
+
+eventsV2FinalMetric <- eventsV2Final2 %>% 
+   mutate(dis_change = 0.02831685*dis_change,
+         max_dis = 0.02831685*max_dis,
+         precip = 2.54*precip,
+         precipYear = 2.54*precipYear,
+         prev_month_dis = 0.02831685*prev_month_dis)
+
+eventsRawFinalMetric <- eventsRawFinal2 %>% 
+   mutate(dis_change = 0.02831685*dis_change,
+         max_dis = 0.02831685*max_dis,
+         precip = 2.54*precip,
+         precipYear = 2.54*precipYear,
+         prev_month_dis = 0.02831685*prev_month_dis)
+
+# function that returns the p value from a linear model output
+lmp <- function (modelobject) {
+    if (class(modelobject) != "lm") stop("Not an object of class 'lm' ")
+    f <- summary(modelobject)$fstatistic
+    p <- pf(f[1],f[2],f[3],lower.tail=F)
+    attributes(p) <- NULL
+    return(p)
+}
+
+# function to add a row of regression info to a tibble
+add.regression.MC <- function(data, cons, met){
+  subset <- data %>% filter(var == cons)
+  metVec <- subset %>% pull(met)
+  regHI <- lm(subset$HI ~ metVec)
+  regSl <- lm(subset$Slope ~ metVec)
+  
+  return(regressions_MC %>% add_row(constituent = cons, metric = met,
+                                    p_HI = lmp(regHI), 
+                                    Rsqd_HI = summary(regHI)$r.squared,
+                                    slope_HI = as.numeric(regHI$coefficients[2]),
+                                    intercept_HI = as.numeric(regHI$coefficients[1]),
+                                    p_Sl = lmp(regSl), 
+                                    Rsqd_Sl = summary(regSl)$r.squared,
+                                    slope_Sl = as.numeric(regSl$coefficients[2]),
+                                    intercept_Sl = as.numeric(regSl$coefficients[1])))
+  
+}
+
+
+# initialize table of regression info
+regressions_MC <- tibble (constituent = character(), metric = character(),
+                          p_HI = numeric(), Rsqd_HI = numeric(), 
+                          slope_HI = numeric(), intercept_HI = numeric(),
+                          p_Sl = numeric(), Rsqd_Sl = numeric(),
+                          slope_Sl = numeric(), intercept_Sl = numeric())
+
+
+# add all regressions
+constituents <- c("bga", "chl", "fdom", "n03", "turb")
+metrics <- c("length", "dis_change", "max_dis", "avg_temp", 
+             "precip", "precipYear", "prev_month_dis")
+
+for(c in constituents){
+  for(m in metrics){
+    regressions_MC <- add.regression.MC(eventsFinalMetric, c, m)
+  }
+}
+
+write_csv(regressions_MC, "data/reg_MC_metric.csv")
+
+##### v2 #####
+
+# function to add a row of regression info to a tibble
+add.regression.MC.V2 <- function(data, cons, met){
+  subset <- data %>% filter(var == cons)
+  metVec <- subset %>% pull(met)
+  regHI <- lm(subset$HI ~ metVec)
+  regSl <- lm(subset$Slope ~ metVec)
+  
+  return(regressions_MC_V2 %>% add_row(constituent = cons, metric = met,
+                                    p_HI = lmp(regHI), 
+                                    Rsqd_HI = summary(regHI)$r.squared,
+                                    slope_HI = as.numeric(regHI$coefficients[2]),
+                                    intercept_HI = as.numeric(regHI$coefficients[1]),
+                                    p_Sl = lmp(regSl), 
+                                    Rsqd_Sl = summary(regSl)$r.squared,
+                                    slope_Sl = as.numeric(regSl$coefficients[2]),
+                                    intercept_Sl = as.numeric(regSl$coefficients[1])))
+  
+}
+
+
+# initialize table of regression info
+regressions_MC_V2 <- tibble (constituent = character(), metric = character(),
+                          p_HI = numeric(), Rsqd_HI = numeric(), 
+                          slope_HI = numeric(), intercept_HI = numeric(),
+                          p_Sl = numeric(), Rsqd_Sl = numeric(),
+                          slope_Sl = numeric(), intercept_Sl = numeric())
+
+
+# add all regressions
+constituents <- c("bga", "chl", "fdom", "n03", "turb")
+metrics <- c("length", "dis_change", "max_dis", "avg_temp", 
+             "precip", "precipYear", "prev_month_dis")
+
+for(c in constituents){
+  for(m in metrics){
+    regressions_MC_V2 <- add.regression.MC.V2(eventsV2FinalMetric, c, m)
+  }
+}
+
+write_csv(regressions_MC_V2, "data/reg_MC_metric_v2.csv")
+
+
+##### raw data version #####
+
+# function to add a row of regression info to a tibble
+add.regression.MC.raw <- function(data, cons, met){
+  subset <- data %>% filter(var == cons)
+  metVec <- subset %>% pull(met)
+  regHI <- lm(subset$HI ~ metVec)
+  regSl <- lm(subset$Slope ~ metVec)
+  
+  return(regressions_MC_raw %>% add_row(constituent = cons, metric = met,
+                                    p_HI = lmp(regHI), 
+                                    Rsqd_HI = summary(regHI)$r.squared,
+                                    slope_HI = as.numeric(regHI$coefficients[2]),
+                                    intercept_HI = as.numeric(regHI$coefficients[1]),
+                                    p_Sl = lmp(regSl), 
+                                    Rsqd_Sl = summary(regSl)$r.squared,
+                                    slope_Sl = as.numeric(regSl$coefficients[2]),
+                                    intercept_Sl = as.numeric(regSl$coefficients[1])))
+  
+}
+
+
+# initialize table of regression info
+regressions_MC_raw <- tibble (constituent = character(), metric = character(),
+                          p_HI = numeric(), Rsqd_HI = numeric(), 
+                          slope_HI = numeric(), intercept_HI = numeric(),
+                          p_Sl = numeric(), Rsqd_Sl = numeric(),
+                          slope_Sl = numeric(), intercept_Sl = numeric())
+
+
+# add all regressions
+constituents <- c("bga", "chl", "fdom", "n03", "turb")
+metrics <- c("length", "dis_change", "max_dis", "avg_temp", 
+             "precip", "precipYear", "prev_month_dis")
+
+for(c in constituents){
+  for(m in metrics){
+    regressions_MC_raw <- add.regression.MC.raw(eventsRawFinalMetric, c, m)
+  }
+}
+
+write_csv(regressions_MC_raw, "data/reg_MC_raw.csv")
+```
 
 To explore the relationships between event metrics and HI/slope responses for each constituent, we can create multiple linear regressions using the event metrics as predictor variables and HI and slope as response variables. Here are functions to do this:
 ```{r}
@@ -566,5 +1300,74 @@ eventsFDOM %>% ggplot(aes(x = length, y = Slope)) +
   xlab("Event length (days)") + ylab("Slope") +
   theme_bw() + theme(plot.background = element_rect(fill = "transparent",colour = NA))
 #dev.off()
+```
+
+Since the ratio of the number of predictor variables to the sample size is too high, step AIC/ multiple regression may not be valid. Instead, we will report the statistics for each individual single-variable regression.
+```{r single regressions}
+
+```
+
+
+To calculate the event metrics using a time lag, we will create a new WQ_hourly_discharge dataframe which uses the appropriate lag for each year
+```{r time lag}
+# average velocity for each year
+yearly_velocity <- pool8_vel %>% 
+  filter(month %in% c(4:10)) %>% 
+  group_by(year) %>% 
+  summarise(mean_vel = mean(VEL))
+
+# function to calculate time lag for each year
+year_lag <- function(Year){
+  # get velocity from the relevant year
+  vel <- yearly_velocity$mean_vel[which(yearly_velocity$year == Year)]
+  # calculate time lag (43452.3 meters)
+  seconds <- 43452.3/vel
+  hours <- seconds/3600
+  if(hours - floor(hours) < 0.5){
+    return(floor(hours))
+  }
+  return(floor(hours) + 1)
+}
+
+MC_vel <- read_csv("data/Pool8_VEL_MC.csv")
+
+MC_vel <- MC_vel %>% 
+  mutate(date = mdy(DATE)) %>% 
+  filter(year(date) > 2014, year(date) < 2019)
+
+library(birk)
+
+# function to calculate time lag for each year
+event_lag <- function(startDate, endDate){
+  vel <- MC_vel %>% drop_na()
+  # get closest date in velocity df to start date
+  closestStartDate <- vel$date[which.closest(vel$date, startDate)]
+  # calculate average velocity 
+  velStart <- vel %>% 
+    filter(date == closestStartDate) %>% 
+    summarize(meanVel = mean(VEL))
+  meanVelStart <- velStart$meanVel
+  # get closest date in velocity df to end date
+  closestEndDate <- vel$date[which.closest(vel$date, endDate)]
+  # calculate average velocity
+  velEnd <- vel %>% 
+    filter(date == closestEndDate) %>% 
+    summarize(meanVel = mean(VEL))
+  meanVelEnd <- velEnd$meanVel
+  # calculate average of start and end date velocities
+  meanVel <- mean(meanVelStart, meanVelEnd)
+  # calculate time lag (43452.3 meters)
+  seconds <- 43452.3/meanVel
+  hours <- seconds/3600
+  # return time lag rounded to the nearest hour
+  if(hours - floor(hours) < 0.5){
+    return(floor(hours))
+  }
+  return(floor(hours) + 1)
+}
+
+eventsLag <- eventsFinal2 %>% 
+  mutate(lag = mapply(event_lag, date(startDate), date(endDate)))
+
 ```
 
